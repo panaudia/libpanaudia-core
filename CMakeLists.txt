@@ -45,6 +45,7 @@ add_library(panaudia-core STATIC
     src/panaudia_core.cpp
     src/session_manager.cpp
     src/moq_transport.cpp
+    src/moq_protocol.cpp
     src/opus_codec.cpp
     src/ring_buffer.cpp
     src/jitter_buffer.cpp
@@ -69,6 +70,7 @@ add_executable(panaudia-core-tests
     tests/test_ring_buffer.cpp
     tests/test_jitter_buffer.cpp
     tests/test_opus_codec.cpp
+    tests/test_moq_protocol.cpp
     tests/test_session.cpp
 )
 

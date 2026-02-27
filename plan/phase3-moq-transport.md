@@ -42,27 +42,29 @@
   - [ ] Handle STREAM_EVENT_SEND_COMPLETE
 
 ### MOQ Protocol Messages
-- [ ] Message framing: `[Type varint][Length 2-bytes big-endian][Content]`
-- [ ] Varint encoding/decoding (QUIC variable-length integer format)
-- [ ] KVP parameter encoding/decoding
-- [ ] Namespace tuple encoding/decoding
-- [ ] Message types to implement:
-  - [ ] CLIENT_SETUP (0x20) — send
-  - [ ] SERVER_SETUP (0x21) — receive
-  - [ ] ANNOUNCE (0x06) — send (with RequestID)
-  - [ ] ANNOUNCE_OK (0x07) — receive (just RequestID, not namespace)
-  - [ ] SUBSCRIBE (0x03) — send (NO TrackAlias — differs from some drafts)
-  - [ ] SUBSCRIBE_OK (0x04) — receive (HAS TrackAlias — assigned by publisher)
-  - [ ] SUBSCRIBE_ANNOUNCES (0x11) — receive from server
-  - [ ] SUBSCRIBE_ANNOUNCES_OK (0x12) — send
+- [x] Message framing: `[Type varint][Length 2-bytes big-endian][Content]`
+- [x] Varint encoding/decoding (QUIC variable-length integer format)
+- [x] KVP parameter encoding/decoding
+- [x] Namespace tuple encoding/decoding
+- [x] Message types to implement:
+  - [x] CLIENT_SETUP (0x20) — send
+  - [x] SERVER_SETUP (0x21) — receive
+  - [x] ANNOUNCE (0x06) — send and receive (with RequestID)
+  - [x] ANNOUNCE_OK (0x07) — send and receive (just RequestID, not namespace)
+  - [x] SUBSCRIBE (0x03) — send and receive (NO TrackAlias — differs from some drafts)
+  - [x] SUBSCRIBE_OK (0x04) — send and receive (HAS TrackAlias — assigned by publisher)
+  - [x] SUBSCRIBE_ERROR (0x05) — receive
+  - [x] SUBSCRIBE_ANNOUNCES (0x11) — receive from server
+  - [x] SUBSCRIBE_ANNOUNCES_OK (0x12) — send
 - [ ] Request ID management: client uses odd IDs, server uses even (or vice versa — check Go server)
 
 ### Datagram Handling
-- [ ] Object Datagram format:
-  - [ ] Send: `[Type varint][TrackAlias varint][GroupID varint][ObjectID varint][Priority 1 byte][Payload]`
-  - [ ] Receive: parse same format, dispatch by TrackAlias
-  - [ ] Type field: 0x00 = datagram (no extensions)
-  - [ ] Priority is a SINGLE BYTE, not varint
+- [x] Object Datagram format:
+  - [x] Send: `[Type varint][TrackAlias varint][GroupID varint][ObjectID varint][Priority 1 byte][Payload]`
+  - [x] Receive: parse same format, dispatch by TrackAlias
+  - [x] Type field: 0x00 = datagram (no extensions), 0x01 = with extensions (parsed by skipping)
+  - [x] Priority is a SINGLE BYTE, not varint
+  - [x] Zero-copy header builder for pre-allocated send path
 - [ ] TrackAlias dispatch map: `std::unordered_map<uint64_t, TrackHandle*>`
   - [ ] Populated when SUBSCRIBE_OK arrives with TrackAlias
   - [ ] Used to route incoming datagrams to the correct track
@@ -73,7 +75,7 @@
   - [ ] Parse datagram header, lookup TrackAlias, deliver payload to track handler
 
 ### JWT Authentication
-- [ ] Pass JWT as MOQ AuthorizationToken parameter (KVP key 0x03) in CLIENT_SETUP
+- [x] Pass JWT as MOQ AuthorizationToken parameter (KVP key 0x03) in SUBSCRIBE
 - [ ] `update_jwt()` — store new token for next connection/reconnection
 - [ ] No JWT parsing or validation — just store and send the string
 
@@ -89,9 +91,10 @@
   - [ ] Callback: `on_subscribe_request(...)` — for server-initiated subscribes to our published tracks
 
 ### Tests
-- [ ] Varint encode/decode — edge cases (0, 1, 63, 64, 16383, 16384, etc.)
-- [ ] Message serialisation/deserialisation — roundtrip for each message type
-- [ ] Datagram format — build and parse, verify fields
+- [x] Varint encode/decode — edge cases (0, 1, 63, 64, 16383, 16384, etc.)
+- [x] Message serialisation/deserialisation — roundtrip for each message type
+- [x] Datagram format — build and parse, verify fields
+- [x] Byte-for-byte compat checks against UE plugin output
 - [ ] **Integration test against Go server:**
   - [ ] Connect with JWT
   - [ ] Complete MOQ handshake
