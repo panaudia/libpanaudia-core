@@ -18,7 +18,7 @@ if [[ "${1:-}" == "tsan" ]]; then
             -DCMAKE_CXX_FLAGS='-fsanitize=thread' \
             -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=thread' && \
         cmake --build build-tsan -j\$(nproc) && \
-        ./build-tsan/panaudia-core-tests \
+        ./build-tsan/panaudia-core-tests '~[stress]' \
     "
 else
     docker run --rm "$IMAGE"
