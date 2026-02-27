@@ -30,13 +30,14 @@ FetchContent_MakeAvailable(Catch2)
 # )
 # FetchContent_MakeAvailable(msquic)
 
-# libopus — audio codec (needed from Phase 2)
-# FetchContent_Declare(
-#     opus
-#     GIT_REPOSITORY https://github.com/xiph/opus.git
-#     GIT_TAG v1.5.2
-# )
-# FetchContent_MakeAvailable(opus)
+# libopus — audio codec
+FetchContent_Declare(
+    opus
+    GIT_REPOSITORY https://github.com/xiph/opus.git
+    GIT_TAG v1.5.2
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(opus)
 
 # --- Library ---
 
@@ -55,6 +56,11 @@ target_include_directories(panaudia-core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(panaudia-core
+    PRIVATE
+        Opus::opus
 )
 
 # --- Tests ---
@@ -80,6 +86,7 @@ catch_discover_tests(panaudia-core-tests)
 
 add_executable(panaudia-bench
     tests/bench_buffers.cpp
+    tests/bench_codec.cpp
 )
 
 target_link_libraries(panaudia-bench
