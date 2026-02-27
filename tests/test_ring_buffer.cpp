@@ -180,7 +180,7 @@ TEST_CASE("RingBuffer concurrent write/read stress", "[ring_buffer][stress]") {
 
     RingBuffer rb(capacity, channels);
 
-    std::atomic<uint32_t> frames_written{0};
+    std::atomic<bool> writer_done{false};
     std::atomic<uint32_t> frames_read_total{0};
 
     // Writer thread
@@ -193,15 +193,15 @@ TEST_CASE("RingBuffer concurrent write/read stress", "[ring_buffer][stress]") {
             }
             rb.write(buf.data(), frames_per_write);
             written += frames_per_write;
-            frames_written.store(written, std::memory_order_relaxed);
         }
+        writer_done.store(true, std::memory_order_release);
     });
 
-    // Reader thread
+    // Reader thread — reads until writer is done and buffer is drained
     std::thread reader([&] {
         std::vector<float> buf(frames_per_read * channels);
         uint32_t total_read = 0;
-        while (total_read < total_frames) {
+        while (!writer_done.load(std::memory_order_acquire) || rb.read_available() > 0) {
             uint32_t got = rb.read(buf.data(), frames_per_read);
             total_read += got;
             if (got == 0) {
@@ -214,6 +214,6 @@ TEST_CASE("RingBuffer concurrent write/read stress", "[ring_buffer][stress]") {
     writer.join();
     reader.join();
 
-    // Reader should have read at least most of the data (some may overflow)
+    // Reader should have read some data (some may be lost to overflow)
     REQUIRE(frames_read_total.load() > 0);
 }

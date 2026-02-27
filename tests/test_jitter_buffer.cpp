@@ -377,15 +377,22 @@ TEST_CASE("JitterBuffer concurrent stress test", "[jitter_buffer][stress]") {
         done.store(true, std::memory_order_release);
     });
 
-    // Reader: simulate RT callback at steady rate
+    // Reader: simulate RT callback at steady rate.
+    // Drain briefly after writer finishes, but don't spin forever.
     std::thread reader([&] {
         std::vector<float> buf(reader_frame);
         uint32_t produced = 0;
-        while (!done.load(std::memory_order_acquire) || jb.get_stats().fill_level_samples > 0) {
+        while (!done.load(std::memory_order_acquire)) {
             if (jb.read(buf.data(), reader_frame)) {
                 produced += reader_frame;
             }
             std::this_thread::yield();
+        }
+        // Drain remaining buffered data (bounded — at most capacity worth)
+        for (int i = 0; i < 1000 && jb.get_stats().fill_level_samples > 0; i++) {
+            if (jb.read(buf.data(), reader_frame)) {
+                produced += reader_frame;
+            }
         }
         reads_produced.store(produced, std::memory_order_relaxed);
     });
