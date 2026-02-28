@@ -32,62 +32,59 @@
   - [x] For each outbound track: ANNOUNCE namespace, then wait for server SUBSCRIBE
   - [x] For each inbound track: SUBSCRIBE to namespace
   - [x] Build TrackAlias→handle map as SUBSCRIBE_OKs arrive
-  - [ ] Start send/recv worker threads
+  - [x] Start send/recv worker threads (session thread polls outbound; datagram callback handles inbound)
   - [x] Report `ConnectionState::Connected` via StatusCallback
 - [x] `disconnect()`:
-  - [ ] Stop send/recv worker threads
+  - [x] Stop send/recv worker threads (session thread stopped on disconnect)
   - [x] Call `MoqTransport::disconnect()`
   - [x] Report `ConnectionState::Disconnected` via StatusCallback
 - [x] `get_track(name)`: lookup in name→handle map, return pointer (or nullptr)
 - [x] `update_jwt(jwt)`: store for next reconnect, pass to transport if it supports hot update
 
 ### Send Workers (Outbound Audio)
-- [ ] One thread per outbound audio track
-- [ ] `send_worker.h` / `send_worker.cpp`
-- [ ] Loop:
-  - [ ] Read from track's `RingBuffer` (blocks briefly or spins if empty — needs design)
-  - [ ] If Opus: encode frame → build datagram → `MoqTransport::send_datagram()`
-  - [ ] If PCM: frame raw samples → build datagram → `MoqTransport::send_datagram()`
-  - [ ] Frame size determines read chunk size (e.g., 5ms × 48kHz × channels)
-- [ ] Pre-allocated encode buffer + datagram buffer (no per-frame allocation)
-- [ ] Thread exit: signalled by disconnect, clean shutdown
-- [ ] On reconnect: flush ring buffer (discard stale audio), restart thread
+- [x] ~~One thread per outbound audio track~~ Session thread polls all outbound tracks (simpler for V1)
+- [x] ~~`send_worker.h` / `send_worker.cpp`~~ Integrated into session_manager.cpp (poll_outbound_tracks)
+- [x] Loop:
+  - [x] Read from track's `RingBuffer` (poll every 5ms in session thread)
+  - [x] If Opus: encode frame → build datagram → `MoqTransport::send_datagram()`
+  - [x] If PCM: frame raw samples → build datagram → `MoqTransport::send_datagram()`
+  - [x] Frame size determines read chunk size (e.g., 5ms × 48kHz × channels)
+- [x] Pre-allocated encode buffer + datagram buffer (no per-frame allocation)
+- [x] Thread exit: signalled by disconnect, clean shutdown
+- [x] On reconnect: flush ring buffer (discard stale audio) — done in Phase 4d
 
 ### Recv Workers (Inbound Audio)
-- [ ] One thread per inbound audio track (or: datagrams dispatched by alias from a single recv callback)
-- [ ] `recv_worker.h` / `recv_worker.cpp`
-- [ ] Actually — msquic delivers datagrams via callback. The pattern is:
-  - [ ] msquic callback receives datagram → parse header → lookup TrackAlias → dispatch
-  - [ ] For audio tracks: decode (Opus or PCM unframe) → write to track's `JitterBuffer`
-  - [ ] For data tracks: invoke `DataRecvCallback` with raw payload
-- [ ] Decide: decode on the msquic callback thread, or queue to a separate decode thread?
-  - Option A: Decode on msquic callback — simpler, but blocks msquic if decode is slow
-  - Option B: Queue raw packets, decode on separate thread — adds latency but isolates msquic
-  - Recommendation: Option A for V1, Opus decode is fast (~0.5ms for a 5ms frame)
-- [ ] Pre-allocated decode buffer (no per-frame allocation)
+- [x] ~~One thread per inbound audio track~~ Datagrams dispatched by alias from msquic callback (Option A)
+- [x] ~~`recv_worker.h` / `recv_worker.cpp`~~ Integrated into session_manager.cpp (dispatch_audio_datagram)
+- [x] msquic delivers datagrams via callback:
+  - [x] msquic callback receives datagram → parse header → lookup TrackAlias → dispatch
+  - [x] For audio tracks: decode (Opus or PCM unframe) → write to track's `JitterBuffer`
+  - [x] For data tracks: invoke `DataRecvCallback` with raw payload
+- [x] Decision: Option A — decode on msquic callback thread (Opus decode is ~3.6µs for 5ms frame)
+- [x] Pre-allocated decode buffer (no per-frame allocation)
 
 ### Data Track Pass-Through
-- [ ] Outbound data: `send_data(handle, bytes, len)`:
-  - [ ] Build MOQ datagram with track's alias
-  - [ ] `MoqTransport::send_datagram()`
-  - [ ] Called from host control thread — not RT, can allocate if needed
-- [ ] Inbound data: when datagram arrives for a data track handle:
-  - [ ] Invoke `DataRecvCallback(handle, payload, len, ctx)`
-  - [ ] Called from msquic callback thread — host must not block
+- [x] Outbound data: `send_data(handle, bytes, len)`:
+  - [x] Build MOQ datagram with track's alias
+  - [x] `MoqTransport::send_datagram()`
+  - [x] Called from host control thread — not RT, can allocate if needed
+- [x] Inbound data: when datagram arrives for a data track handle:
+  - [x] Invoke `DataRecvCallback(handle, payload, len, ctx)`
+  - [x] Called from msquic callback thread — host must not block
 
 ### Auto-Reconnection
-- [ ] On connection drop (detected via msquic callback or transport state change):
-  - [ ] Report `ConnectionState::Reconnecting` via StatusCallback
-  - [ ] Stop send workers
-  - [ ] Exponential backoff: 100ms, 200ms, 400ms, ..., cap at 10s
-  - [ ] On successful reconnect:
-    - [ ] Re-announce, re-subscribe all tracks from original SessionConfig
-    - [ ] Rebuild TrackAlias→handle map
-    - [ ] Flush outbound ring buffers (stale audio)
-    - [ ] Inbound jitter buffers are already in FILLING — they re-accumulate naturally
-    - [ ] Restart send workers
-    - [ ] Report `ConnectionState::Connected` via StatusCallback
-  - [ ] On max retries or fatal error: report `ConnectionState::Failed`
+- [x] On connection drop (detected via msquic callback or transport state change):
+  - [x] Report `ConnectionState::Reconnecting` via StatusCallback
+  - [x] Stop send workers (session thread pauses outbound polling during reconnect)
+  - [x] Exponential backoff: 100ms, 200ms, 400ms, ..., cap at 10s
+  - [x] On successful reconnect:
+    - [x] Re-announce, re-subscribe all tracks from original SessionConfig
+    - [x] Rebuild TrackAlias→handle map
+    - [x] Flush outbound ring buffers (discard stale audio)
+    - [x] Inbound jitter buffers are already in FILLING — they re-accumulate naturally
+    - [x] Restart send workers (session thread resumes outbound polling)
+    - [x] Report `ConnectionState::Connected` via StatusCallback
+  - [x] On max retries or fatal error: report `ConnectionState::Failed`
 
 ### Status & Stats
 - [x] `get_connection_state()` — atomic read of current state

@@ -11,7 +11,7 @@
 - [x] Create top-level `CMakeLists.txt` with project name, C++17 standard, compile options
 - [x] `FetchContent` for msquic (pinned to v2.6.0 commit `ed14762f` — same as UE plugin, commented out until Phase 3)
 - [x] `FetchContent` for libopus (pinned to v1.5.2, commented out until Phase 2)
-- [ ] Verify both dependencies build from source on macOS arm64 and Linux x86_64 (deferred to phases 2/3)
+- [x] Verify both dependencies build from source on macOS arm64 and Linux x86_64 (verified in phases 2/3 + Docker)
 - [x] Static library target `libpanaudia-core` from `src/` sources
 - [x] Test target `panaudia-core-tests` (Catch2 v3.7.1 via FetchContent)
 - [x] Test harness target `panaudia-test-harness` (standalone executable)
@@ -40,7 +40,7 @@
   - [x] `src/send_worker.cpp`
   - [x] `src/recv_worker.cpp`
 - [x] Verify the static library builds on macOS (arm64) — 0 warnings, 97KB
-- [ ] Verify the static library builds on Linux (deferred — no Linux machine available)
+- [x] Verify the static library builds on Linux (verified via Docker/Ubuntu 24.04)
 
 ### CI
 - [ ] GitHub Actions workflow: build on macOS (arm64 via M1 runner or x86_64)

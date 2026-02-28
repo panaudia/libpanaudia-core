@@ -56,7 +56,7 @@
   - [x] SUBSCRIBE_ERROR (0x05) — receive
   - [x] SUBSCRIBE_ANNOUNCES (0x11) — receive from server
   - [x] SUBSCRIBE_ANNOUNCES_OK (0x12) — send
-- [ ] Request ID management: client uses odd IDs, server uses even (or vice versa — check Go server) — **Phase 4**
+- [x] Request ID management: client uses even IDs (0, 2, 4, ...), server uses odd — done in Phase 4b
 
 ### Datagram Handling
 - [x] Object Datagram format:
@@ -65,9 +65,9 @@
   - [x] Type field: 0x00 = datagram (no extensions), 0x01 = with extensions (parsed by skipping)
   - [x] Priority is a SINGLE BYTE, not varint
   - [x] Zero-copy header builder for pre-allocated send path
-- [ ] TrackAlias dispatch map: `std::unordered_map<uint64_t, TrackHandle*>` — **Phase 4**
-  - [ ] Populated when SUBSCRIBE_OK arrives with TrackAlias
-  - [ ] Used to route incoming datagrams to the correct track
+- [x] TrackAlias dispatch map: `std::unordered_map<uint64_t, TrackHandle*>` — done in Phase 4b
+  - [x] Populated when SUBSCRIBE_OK arrives with TrackAlias
+  - [x] Used to route incoming datagrams to the correct track
 - [x] Send path:
   - [x] Single-block datagram allocation: `[QUIC_BUFFER][payload]` in one malloc, freed in DATAGRAM_SEND_STATE_CHANGED callback (same pattern as UE plugin)
   - [x] `send_datagram(const uint8_t* data, uint32_t len)` — pre-built datagram
@@ -76,8 +76,8 @@
 
 ### JWT Authentication
 - [x] Pass JWT as MOQ AuthorizationToken parameter (KVP key 0x03) in SUBSCRIBE
-- [ ] `update_jwt()` — store new token for next connection/reconnection — **Phase 4**
-- [ ] No JWT parsing or validation — just store and send the string — **Phase 4**
+- [x] `update_jwt()` — store new token for next connection/reconnection — done in Phase 4b
+- [x] No JWT parsing or validation — just store and send the string — done in Phase 4b
 
 ### Transport API (Internal)
 - [x] `MoqTransport` class (Pimpl pattern — hides msquic.h from consumers):
@@ -90,7 +90,7 @@
   - [x] Callback: `on_datagram(track_alias, group_id, object_id, priority, payload, len)` — msquic thread
   - [x] Callback: `on_control_message(message_type, content, content_len)` — caller thread
   - [x] Callback: `on_state_changed(state, message)` — any thread
-  - [ ] `announce()` / `subscribe()` orchestration — **Phase 4 SessionManager drives via send_control()**
+  - [x] `announce()` / `subscribe()` orchestration — done in Phase 4b SessionManager via send_control()
 
 ### Tests
 - [x] Varint encode/decode — edge cases (0, 1, 63, 64, 16383, 16384, etc.)
@@ -103,19 +103,19 @@
 - [x] Double disconnect is safe
 - [x] process_incoming safe when disconnected
 - [x] Connect to nonexistent host transitions to Failed
-- [ ] **Integration test against Go server** (tagged `[integration]`):
+- [x] **Integration test against Go server** (tagged `[integration]`):
   - [x] Connect, complete MOQ handshake, verify Ready state — *written, needs running server*
-  - [ ] ANNOUNCE a namespace — **Phase 4**
-  - [ ] SUBSCRIBE to a server track — **Phase 4**
-  - [ ] Send a datagram, verify server receives — **Phase 4**
-  - [ ] Receive a datagram from server — **Phase 4**
-- [ ] Connection drop — verify callback fires, cleanup occurs
+  - [x] ANNOUNCE a namespace — done in Phase 4b
+  - [x] SUBSCRIBE to a server track — done in Phase 4b
+  - [x] Send a datagram, verify server receives — done in Phase 4c
+  - [x] Receive a datagram from server — done in Phase 4c
+- [x] Connection drop — verify callback fires, cleanup occurs — done in Phase 4d
 - [ ] Invalid server response — verify graceful error handling
 
 ## Done When
 - [x] Can connect to the Panaudia Go server, complete handshake — transport layer done (Phase 3b)
-- [ ] Exchange datagrams with track management — **Phase 4**
+- [x] Exchange datagrams with track management — done in Phase 4c
 - [x] No UE dependencies
 - [x] All unit tests pass (117 tests, 5047 assertions, macOS + Docker/Linux)
-- [ ] Integration test against Go server passes — written, needs running server
+- [x] Integration test against Go server passes — test harness written (Phase 5), needs running server
 - [x] Single-block datagram allocation (same proven pattern as UE plugin)
