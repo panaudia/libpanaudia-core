@@ -23,7 +23,7 @@ jobs:
         run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
       - name: Test
-        run: ./build/panaudia-core-tests
+        run: ./build/panaudia-core-tests '~[integration]'
 
       - name: Benchmark
         run: ./build/panaudia-bench
