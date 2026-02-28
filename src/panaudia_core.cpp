@@ -1,10 +1,10 @@
 #include "panaudia/core.h"
+#include "panaudia/session_manager.h"
 
 namespace panaudia {
 
 struct PanaudiaCore::Impl {
-    SessionConfig config;
-    ConnectionState state = ConnectionState::Disconnected;
+    SessionManager session;
 };
 
 PanaudiaCore::PanaudiaCore() : impl_(new Impl()) {}
@@ -14,57 +14,55 @@ PanaudiaCore::~PanaudiaCore() {
 }
 
 void PanaudiaCore::configure(const SessionConfig& config) {
-    impl_->config = config;
+    impl_->session.configure(config);
 }
 
 void PanaudiaCore::connect() {
-    // TODO: Phase 4
+    impl_->session.connect();
 }
 
 void PanaudiaCore::disconnect() {
-    // TODO: Phase 4
+    impl_->session.disconnect();
 }
 
 void PanaudiaCore::update_jwt(const std::string& jwt) {
-    impl_->config.jwt = jwt;
+    impl_->session.update_jwt(jwt);
 }
 
-TrackHandle* PanaudiaCore::get_track(const std::string& /*name*/) {
-    // TODO: Phase 4
-    return nullptr;
+TrackHandle* PanaudiaCore::get_track(const std::string& name) {
+    return impl_->session.get_track(name);
 }
 
-void PanaudiaCore::write_audio(TrackHandle* /*track*/,
-                                const float* /*samples*/,
-                                uint32_t /*frame_count*/,
-                                uint64_t /*host_time*/) {
-    // TODO: Phase 4
+void PanaudiaCore::write_audio(TrackHandle* track,
+                                const float* samples,
+                                uint32_t frame_count,
+                                uint64_t host_time) {
+    impl_->session.write_audio(track, samples, frame_count, host_time);
 }
 
-uint32_t PanaudiaCore::read_audio(TrackHandle* /*track*/,
-                                   float* /*buffer*/,
-                                   uint32_t /*frame_count*/,
-                                   uint64_t /*host_time*/) {
-    // TODO: Phase 4
-    return 0;
+uint32_t PanaudiaCore::read_audio(TrackHandle* track,
+                                   float* buffer,
+                                   uint32_t frame_count,
+                                   uint64_t host_time) {
+    return impl_->session.read_audio(track, buffer, frame_count, host_time);
 }
 
-void PanaudiaCore::send_data(TrackHandle* /*track*/,
-                              const uint8_t* /*data*/,
-                              uint32_t /*data_len*/) {
-    // TODO: Phase 4
+void PanaudiaCore::send_data(TrackHandle* track,
+                              const uint8_t* data,
+                              uint32_t data_len) {
+    impl_->session.send_data(track, data, data_len);
 }
 
 ConnectionState PanaudiaCore::get_connection_state() const {
-    return impl_->state;
+    return impl_->session.get_connection_state();
 }
 
-BufferStatus PanaudiaCore::get_buffer_status(TrackHandle* /*track*/) const {
-    return {};
+BufferStatus PanaudiaCore::get_buffer_status(TrackHandle* track) const {
+    return impl_->session.get_buffer_status(track);
 }
 
 SessionStats PanaudiaCore::get_stats() const {
-    return {impl_->state, 0, 0, 0, 0, 0, 0.0};
+    return impl_->session.get_stats();
 }
 
 }  // namespace panaudia
