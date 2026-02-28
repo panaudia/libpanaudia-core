@@ -7,6 +7,7 @@
 #include "panaudia/ring_buffer.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
@@ -109,6 +110,17 @@ private:
     bool orchestration_started_ = false;
     bool first_subscribe_sent_ = false;  // tracks whether JWT has been attached
 
+    // Reconnection state
+    std::atomic<bool> manual_disconnect_{false};  // written by host, read by session thread
+    bool reconnecting_ = false;                   // session thread only
+    uint32_t reconnect_attempt_ = 0;
+    uint32_t total_reconnect_count_ = 0;
+    std::chrono::steady_clock::time_point reconnect_deadline_;
+
+    // Cached URL from connect()
+    std::string parsed_host_;
+    uint16_t parsed_port_ = 443;
+
     // URL parsing
     static bool parse_url(const std::string& url,
                           std::string& host, uint16_t& port);
@@ -118,6 +130,13 @@ private:
     void start_orchestration();
     void handle_control_message(uint64_t message_type,
                                 const uint8_t* content, int32_t content_len);
+
+    // Reconnection helpers
+    void handle_transport_state_change(TransportState ts, const char* message);
+    TransportCallbacks make_transport_callbacks();
+    void attempt_reconnect();
+    void reset_moq_state();
+    uint32_t calculate_reconnect_delay_ms() const;
 
     // Phase 4c: send/recv
     void poll_outbound_tracks();

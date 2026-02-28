@@ -107,6 +107,11 @@ struct SessionConfig {
     LogCallback log_callback = nullptr;
     void* log_ctx = nullptr;
     LogLevel log_level = LogLevel::Info;
+
+    // Reconnection
+    uint32_t max_reconnect_attempts = 10;      // 0 = disabled
+    uint32_t reconnect_base_delay_ms = 100;    // exponential backoff start
+    uint32_t reconnect_max_delay_ms = 10000;   // backoff cap (10s)
 };
 
 // --- Status types ---
@@ -127,6 +132,7 @@ struct SessionStats {
     uint64_t packets_received;
     uint64_t packets_lost;
     double rtt_ms;
+    uint32_t reconnect_count;
 };
 
 // --- PanaudiaCore ---

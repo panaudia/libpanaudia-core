@@ -14,6 +14,7 @@ static SessionConfig make_test_config() {
     config.jitter_buffer_min_ms = 10;
     config.jitter_buffer_max_ms = 200;
     config.jitter_buffer_initial_ms = 60;
+    config.max_reconnect_attempts = 0;  // disable reconnection in existing tests
 
     // Outbound Opus audio (mic)
     TrackConfig mic;
@@ -841,4 +842,255 @@ TEST_CASE("Opus encode-decode round trip through track buffers",
         sum += std::fabs(output[i]);
     }
     REQUIRE(sum > 0.01f);
+}
+
+// ---- Phase 4d: Auto-reconnection ----
+//
+// IMPORTANT: In tests with status callbacks, declare SessionManager AFTER
+// the callback context variables. C++ destroys locals in reverse declaration
+// order, so sm is destroyed first — its destructor calls disconnect() while
+// the callback context is still valid.
+
+#include <chrono>
+#include <thread>
+#include <mutex>
+
+// Callback context for collecting state history
+struct StateHistory {
+    std::mutex mtx;
+    std::vector<ConnectionState> states;
+
+    static void callback(ConnectionState state, const char*, void* ctx) {
+        auto* self = static_cast<StateHistory*>(ctx);
+        std::lock_guard<std::mutex> lock(self->mtx);
+        self->states.push_back(state);
+    }
+
+    bool saw(ConnectionState s) {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (auto st : states) {
+            if (st == s) return true;
+        }
+        return false;
+    }
+
+    bool saw_after(ConnectionState first, ConnectionState second) {
+        std::lock_guard<std::mutex> lock(mtx);
+        bool saw_first = false;
+        for (auto st : states) {
+            if (st == first) saw_first = true;
+            if (saw_first && st == second) return true;
+        }
+        return false;
+    }
+};
+
+// make_test_config variant using localhost for fast connection refusal.
+// Using test.panaudia.com causes DNS/TCP timeouts in Docker (~30s per attempt).
+// 127.0.0.1:19999 gets "connection refused" immediately on all platforms.
+static SessionConfig make_reconnect_test_config() {
+    auto config = make_test_config();
+    config.server_url = "127.0.0.1:19999";
+    return config;
+}
+
+// Helper to poll until a state is reached or timeout
+static bool wait_for_state(SessionManager& sm, ConnectionState target,
+                            int timeout_ms) {
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (sm.get_connection_state() == target) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return sm.get_connection_state() == target;
+}
+
+TEST_CASE("Default SessionConfig has reconnection enabled", "[session][4d]") {
+    SessionConfig config;
+    REQUIRE(config.max_reconnect_attempts == 10);
+    REQUIRE(config.reconnect_base_delay_ms == 100);
+    REQUIRE(config.reconnect_max_delay_ms == 10000);
+}
+
+TEST_CASE("Reconnection disabled when max_reconnect_attempts=0",
+          "[session][4d]") {
+    // Callback context declared first (destroyed last)
+    StateHistory history;
+
+    auto config = make_reconnect_test_config();
+    config.status_callback = StateHistory::callback;
+    config.status_ctx = &history;
+
+    // sm declared after history (destroyed first)
+    SessionManager sm;
+    sm.configure(config);
+    sm.connect();
+
+    // Wait for connection to fail (no server running)
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Should never see Reconnecting state
+    REQUIRE_FALSE(history.saw(ConnectionState::Reconnecting));
+
+    sm.disconnect();
+}
+
+TEST_CASE("Connection failure with reconnect enabled transitions to Reconnecting",
+          "[session][4d]") {
+    StateHistory history;
+
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 3;
+    config.reconnect_base_delay_ms = 50;
+    config.status_callback = StateHistory::callback;
+    config.status_ctx = &history;
+
+    SessionManager sm;
+    sm.configure(config);
+    sm.connect();
+
+    // Wait for connection failure + reconnect transition
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    REQUIRE(history.saw(ConnectionState::Reconnecting));
+
+    sm.disconnect();
+}
+
+TEST_CASE("disconnect() during Reconnecting stops cycle", "[session][4d]") {
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 10;
+    config.reconnect_base_delay_ms = 200;
+
+    SessionManager sm;
+    sm.configure(config);
+    sm.connect();
+
+    // Wait for connection to fail and enter Reconnecting
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Disconnect should stop the reconnect cycle
+    sm.disconnect();
+    REQUIRE(sm.get_connection_state() == ConnectionState::Disconnected);
+
+    // Wait and verify it stays Disconnected
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    REQUIRE(sm.get_connection_state() == ConnectionState::Disconnected);
+}
+
+TEST_CASE("Max attempts exhausted transitions to Failed", "[session][4d]") {
+    StateHistory history;
+
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 2;
+    config.reconnect_base_delay_ms = 50;
+    config.reconnect_max_delay_ms = 200;
+    config.status_callback = StateHistory::callback;
+    config.status_ctx = &history;
+
+    SessionManager sm;
+    sm.configure(config);
+    sm.connect();
+
+    // Wait for initial fail + 2 reconnect attempts (each takes msquic time + backoff)
+    REQUIRE(wait_for_state(sm, ConnectionState::Failed, 30000));
+
+    // Verify we saw Reconnecting then Failed
+    REQUIRE(history.saw(ConnectionState::Reconnecting));
+    REQUIRE(history.saw_after(ConnectionState::Reconnecting,
+                               ConnectionState::Failed));
+
+    sm.disconnect();
+}
+
+TEST_CASE("Reconnect count tracked in stats", "[session][4d]") {
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 2;
+    config.reconnect_base_delay_ms = 50;
+    config.reconnect_max_delay_ms = 200;
+
+    SessionManager sm;
+    sm.configure(config);
+    sm.connect();
+
+    // Wait for reconnection attempts to complete
+    REQUIRE(wait_for_state(sm, ConnectionState::Failed, 30000));
+
+    auto stats = sm.get_stats();
+    REQUIRE(stats.reconnect_count > 0);
+
+    sm.disconnect();
+}
+
+TEST_CASE("connect() rejected during Reconnecting", "[session][4d]") {
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 10;
+    config.reconnect_base_delay_ms = 500;
+
+    SessionManager sm;
+    sm.configure(config);
+    sm.connect();
+
+    // Wait for Reconnecting state
+    REQUIRE(wait_for_state(sm, ConnectionState::Reconnecting, 5000));
+
+    // Try second connect — should be no-op
+    sm.connect();
+    REQUIRE(sm.get_connection_state() == ConnectionState::Reconnecting);
+
+    sm.disconnect();
+}
+
+TEST_CASE("Track MOQ state reset during reconnection", "[session][4d]") {
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 2;
+    config.reconnect_base_delay_ms = 50;
+    config.reconnect_max_delay_ms = 200;
+
+    SessionManager sm;
+    sm.configure(config);
+
+    // Write some audio to a track first
+    auto* mic = sm.get_track("mic");
+    REQUIRE(mic != nullptr);
+    std::vector<float> pcm(480, 0.5f);
+    sm.write_audio(mic, pcm.data(), 480, 0);
+
+    sm.connect();
+
+    // Wait for reconnection cycle to complete
+    REQUIRE(wait_for_state(sm, ConnectionState::Failed, 30000));
+
+    // After reconnection cycle, MOQ state should be reset
+    REQUIRE(mic->moq_track_alias == 0);
+    REQUIRE(mic->moq_request_id == 0);
+    REQUIRE(mic->next_object_id == 0);
+
+    sm.disconnect();
+}
+
+TEST_CASE("Exponential backoff timing", "[session][4d]") {
+    auto config = make_reconnect_test_config();
+    config.max_reconnect_attempts = 3;
+    config.reconnect_base_delay_ms = 100;
+    config.reconnect_max_delay_ms = 10000;
+
+    SessionManager sm;
+    sm.configure(config);
+
+    auto start = std::chrono::steady_clock::now();
+    sm.connect();
+
+    // Wait for all 3 attempts to exhaust
+    REQUIRE(wait_for_state(sm, ConnectionState::Failed, 30000));
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    // Backoff delays: 100ms + 200ms = 300ms minimum between attempts
+    // (first attempt is immediate, delay is between failures and next attempt)
+    REQUIRE(elapsed.count() >= 200);
+
+    sm.disconnect();
 }

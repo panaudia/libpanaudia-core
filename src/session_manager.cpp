@@ -187,65 +187,14 @@ void SessionManager::update_jwt(const std::string& jwt) {
 }
 
 // ---------------------------------------------------------------------------
-// connect()
+// make_transport_callbacks()
 // ---------------------------------------------------------------------------
 
-void SessionManager::connect() {
-    // Reject if already connected/connecting
-    auto current = state_.load();
-    if (current == ConnectionState::Connecting ||
-        current == ConnectionState::Connected) {
-        return;
-    }
-
-    // Parse URL
-    std::string host;
-    uint16_t port = 443;
-    if (!parse_url(config_.server_url, host, port)) {
-        log(LogLevel::Error, "Failed to parse server URL: %s",
-            config_.server_url.c_str());
-        state_.store(ConnectionState::Failed);
-        if (config_.status_callback) {
-            config_.status_callback(ConnectionState::Failed,
-                                    "Invalid server URL", config_.status_ctx);
-        }
-        return;
-    }
-
-    // Create transport
-    transport_ = std::make_unique<MoqTransport>();
-
-    // Set up transport config
-    TransportConfig tc;
-    tc.host = host;
-    tc.port = port;
-    tc.skip_cert_validation = true;  // dev/self-signed certs
-
-    // Set up transport callbacks
+TransportCallbacks SessionManager::make_transport_callbacks() {
     TransportCallbacks cb;
 
     cb.on_state_changed = [this](TransportState ts, const char* message) {
-        // Map TransportState → ConnectionState
-        ConnectionState cs;
-        switch (ts) {
-        case TransportState::Disconnected:
-            cs = ConnectionState::Disconnected;
-            break;
-        case TransportState::Connecting:
-        case TransportState::Connected:  // still doing MOQ handshake
-            cs = ConnectionState::Connecting;
-            break;
-        case TransportState::Ready:
-            cs = ConnectionState::Connected;
-            break;
-        case TransportState::Failed:
-            cs = ConnectionState::Failed;
-            break;
-        }
-        state_.store(cs);
-        if (config_.status_callback) {
-            config_.status_callback(cs, message, config_.status_ctx);
-        }
+        handle_transport_state_change(ts, message);
     };
 
     cb.on_control_message = [this](uint64_t message_type,
@@ -272,6 +221,243 @@ void SessionManager::connect() {
         }
     };
 
+    return cb;
+}
+
+// ---------------------------------------------------------------------------
+// handle_transport_state_change()
+// ---------------------------------------------------------------------------
+
+void SessionManager::handle_transport_state_change(TransportState ts,
+                                                    const char* message) {
+    if (reconnecting_) {
+        // During reconnection, suppress intermediate state callbacks
+        switch (ts) {
+        case TransportState::Disconnected:
+            // Old transport cleanup — ignore
+            break;
+        case TransportState::Connecting:
+        case TransportState::Connected:
+            // Still reconnecting — stay in Reconnecting state
+            break;
+        case TransportState::Ready:
+            // Reconnect succeeded!
+            reconnecting_ = false;
+            reconnect_attempt_ = 0;
+            state_.store(ConnectionState::Connected);
+            log(LogLevel::Info, "Reconnected successfully (total reconnects: %u)",
+                total_reconnect_count_);
+            if (config_.status_callback) {
+                config_.status_callback(ConnectionState::Connected,
+                                        "Reconnected", config_.status_ctx);
+            }
+            break;
+        case TransportState::Failed:
+            // Schedule next attempt or give up
+            if (reconnect_attempt_ < config_.max_reconnect_attempts) {
+                uint32_t delay = calculate_reconnect_delay_ms();
+                reconnect_deadline_ = std::chrono::steady_clock::now() +
+                                      std::chrono::milliseconds(delay);
+                log(LogLevel::Info,
+                    "Reconnect attempt %u failed, retrying in %ums",
+                    reconnect_attempt_, delay);
+            } else {
+                reconnecting_ = false;
+                state_.store(ConnectionState::Failed);
+                log(LogLevel::Error,
+                    "Reconnection failed after %u attempts", reconnect_attempt_);
+                if (config_.status_callback) {
+                    config_.status_callback(ConnectionState::Failed,
+                                            "Reconnection failed",
+                                            config_.status_ctx);
+                }
+            }
+            break;
+        }
+        return;
+    }
+
+    // Normal (not reconnecting) state mapping
+    ConnectionState cs = ConnectionState::Failed;
+    switch (ts) {
+    case TransportState::Disconnected:
+        cs = ConnectionState::Disconnected;
+        break;
+    case TransportState::Connecting:
+    case TransportState::Connected:  // still doing MOQ handshake
+        cs = ConnectionState::Connecting;
+        break;
+    case TransportState::Ready:
+        cs = ConnectionState::Connected;
+        reconnect_attempt_ = 0;  // reset on successful connection
+        break;
+    case TransportState::Failed:
+        if (config_.max_reconnect_attempts > 0 &&
+            !manual_disconnect_.load()) {
+            // Start reconnection cycle
+            reconnecting_ = true;
+            reconnect_attempt_ = 0;
+            cs = ConnectionState::Reconnecting;
+            state_.store(cs);
+            log(LogLevel::Info,
+                "Connection lost, starting reconnection (max %u attempts)",
+                config_.max_reconnect_attempts);
+            if (config_.status_callback) {
+                config_.status_callback(cs, message, config_.status_ctx);
+            }
+            // Schedule first attempt immediately
+            reconnect_deadline_ = std::chrono::steady_clock::now();
+            return;
+        }
+        cs = ConnectionState::Failed;
+        break;
+    }
+    state_.store(cs);
+    if (config_.status_callback) {
+        config_.status_callback(cs, message, config_.status_ctx);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// reset_moq_state()
+// ---------------------------------------------------------------------------
+
+void SessionManager::reset_moq_state() {
+    request_id_map_.clear();
+    alias_map_.clear();
+    next_request_id_ = 0;
+    next_track_alias_ = 1;
+    orchestration_started_ = false;
+    first_subscribe_sent_ = false;
+
+    for (auto& t : tracks_) {
+        t->moq_track_alias = 0;
+        t->moq_request_id = 0;
+        t->next_object_id = 0;
+        t->next_group_id = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// calculate_reconnect_delay_ms()
+// ---------------------------------------------------------------------------
+
+uint32_t SessionManager::calculate_reconnect_delay_ms() const {
+    // delay = base * 2^attempt, capped at max
+    uint32_t delay = config_.reconnect_base_delay_ms;
+    for (uint32_t i = 0; i < reconnect_attempt_; i++) {
+        delay *= 2;
+        if (delay >= config_.reconnect_max_delay_ms) {
+            return config_.reconnect_max_delay_ms;
+        }
+    }
+    return delay;
+}
+
+// ---------------------------------------------------------------------------
+// attempt_reconnect()
+// ---------------------------------------------------------------------------
+
+void SessionManager::attempt_reconnect() {
+    reconnect_attempt_++;
+    total_reconnect_count_++;
+
+    // Check max attempts
+    if (reconnect_attempt_ > config_.max_reconnect_attempts) {
+        reconnecting_ = false;
+        state_.store(ConnectionState::Failed);
+        log(LogLevel::Error,
+            "Reconnection failed after %u attempts", reconnect_attempt_ - 1);
+        if (config_.status_callback) {
+            config_.status_callback(ConnectionState::Failed,
+                                    "Reconnection failed",
+                                    config_.status_ctx);
+        }
+        return;
+    }
+
+    log(LogLevel::Info, "Reconnect attempt %u/%u",
+        reconnect_attempt_, config_.max_reconnect_attempts);
+
+    // Tear down old transport
+    if (transport_) {
+        transport_->disconnect();
+        transport_.reset();
+    }
+
+    // Reset MOQ state
+    reset_moq_state();
+
+    // Flush outbound ring buffers (discard stale audio)
+    for (auto& t : tracks_) {
+        if (t->ring_buffer) {
+            t->ring_buffer->flush();
+        }
+    }
+
+    // Create new transport and connect
+    transport_ = std::make_unique<MoqTransport>();
+
+    TransportConfig tc;
+    tc.host = parsed_host_;
+    tc.port = parsed_port_;
+    tc.skip_cert_validation = true;
+
+    auto cb = make_transport_callbacks();
+
+    if (!transport_->connect(tc, cb)) {
+        log(LogLevel::Warn, "Reconnect transport init failed");
+        transport_.reset();
+        // Schedule next attempt
+        uint32_t delay = calculate_reconnect_delay_ms();
+        reconnect_deadline_ = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(delay);
+        log(LogLevel::Info, "Next reconnect in %ums", delay);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// connect()
+// ---------------------------------------------------------------------------
+
+void SessionManager::connect() {
+    // Reject if already connected/connecting/reconnecting
+    auto current = state_.load();
+    if (current == ConnectionState::Connecting ||
+        current == ConnectionState::Connected ||
+        current == ConnectionState::Reconnecting) {
+        return;
+    }
+
+    // Parse URL
+    if (!parse_url(config_.server_url, parsed_host_, parsed_port_)) {
+        log(LogLevel::Error, "Failed to parse server URL: %s",
+            config_.server_url.c_str());
+        state_.store(ConnectionState::Failed);
+        if (config_.status_callback) {
+            config_.status_callback(ConnectionState::Failed,
+                                    "Invalid server URL", config_.status_ctx);
+        }
+        return;
+    }
+
+    // Reset reconnection state
+    manual_disconnect_.store(false);
+    reconnecting_ = false;
+    reconnect_attempt_ = 0;
+    total_reconnect_count_ = 0;
+
+    // Create transport
+    transport_ = std::make_unique<MoqTransport>();
+
+    // Set up transport config
+    TransportConfig tc;
+    tc.host = parsed_host_;
+    tc.port = parsed_port_;
+    tc.skip_cert_validation = true;  // dev/self-signed certs
+
+    auto cb = make_transport_callbacks();
+
     // Connect transport
     if (!transport_->connect(tc, cb)) {
         log(LogLevel::Error, "Transport connect failed");
@@ -291,6 +477,17 @@ void SessionManager::connect() {
 // ---------------------------------------------------------------------------
 
 void SessionManager::disconnect() {
+    // Nothing to do if already fully disconnected (prevents destructor
+    // from re-firing status callback after explicit disconnect)
+    if (state_.load() == ConnectionState::Disconnected &&
+        !session_running_.load() && !transport_) {
+        return;
+    }
+
+    // Stop reconnection cycle
+    manual_disconnect_.store(true);
+    reconnecting_ = false;
+
     // Stop session thread
     if (session_running_.load()) {
         session_running_.store(false);
@@ -307,19 +504,10 @@ void SessionManager::disconnect() {
     }
 
     // Clear orchestration state
-    request_id_map_.clear();
-    alias_map_.clear();
-    next_request_id_ = 0;
-    next_track_alias_ = 1;
-    orchestration_started_ = false;
-    first_subscribe_sent_ = false;
+    reset_moq_state();
 
-    // Reset track MOQ state and flush outbound ring buffers
+    // Flush outbound ring buffers
     for (auto& t : tracks_) {
-        t->moq_track_alias = 0;
-        t->moq_request_id = 0;
-        t->next_object_id = 0;
-        t->next_group_id = 0;
         if (t->ring_buffer) {
             t->ring_buffer->flush();
         }
@@ -338,6 +526,12 @@ void SessionManager::disconnect() {
 
 void SessionManager::session_thread_func() {
     while (session_running_.load()) {
+        // Reconnection timer check
+        if (reconnecting_ &&
+            std::chrono::steady_clock::now() >= reconnect_deadline_) {
+            attempt_reconnect();
+        }
+
         if (transport_) {
             // Drain msquic queues, fires on_control_message callback
             transport_->process_incoming();
@@ -804,7 +998,7 @@ BufferStatus SessionManager::get_buffer_status(TrackHandle* track) const {
 }
 
 SessionStats SessionManager::get_stats() const {
-    return {state_.load(), 0, 0, 0, 0, 0, 0.0};
+    return {state_.load(), 0, 0, 0, 0, 0, 0.0, total_reconnect_count_};
 }
 
 }  // namespace panaudia

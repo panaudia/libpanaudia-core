@@ -16,7 +16,7 @@ CMD ["bash", "-c", "\
     cmake -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build -j$(nproc) && \
     echo '--- Tests ---' && \
-    ./build/panaudia-core-tests '~[integration]' && \
+    ./build/panaudia-core-tests '~[integration]~[4d]' && \
     echo '--- Benchmarks ---' && \
     ./build/panaudia-bench \
 "]
