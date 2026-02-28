@@ -39,6 +39,14 @@ struct TrackHandle {
     // Codecs (owned, created during configure)
     std::unique_ptr<OpusEncoderWrapper> encoder;     // outbound Opus audio only
     std::unique_ptr<OpusDecoderWrapper> decoder;     // inbound Opus audio only
+
+    // Pre-allocated send buffers (outbound audio only, sized in configure)
+    std::vector<float> pcm_read_buffer;        // frame_size_samples * channels
+    std::vector<uint8_t> encode_output_buffer; // Opus: 512 bytes, PCM: frame_size*channels*4
+    std::vector<uint8_t> datagram_buffer;      // 34 (max header) + max payload
+
+    // Pre-allocated recv decode buffer (inbound audio only, sized in configure)
+    std::vector<float> decode_buffer;          // 960 * channels (covers up to 20ms @ 48kHz)
 };
 
 // ---------------------------------------------------------------------------
@@ -110,6 +118,15 @@ private:
     void start_orchestration();
     void handle_control_message(uint64_t message_type,
                                 const uint8_t* content, int32_t content_len);
+
+    // Phase 4c: send/recv
+    void poll_outbound_tracks();
+    void send_audio_frame(TrackHandle* track);
+    void send_pcm_frame(TrackHandle* track);
+    void dispatch_audio_datagram(TrackHandle* track,
+                                  const uint8_t* payload, int32_t payload_len);
+    void dispatch_data_datagram(TrackHandle* track,
+                                 const uint8_t* payload, int32_t payload_len);
 
     // Logging
     void log(LogLevel level, const char* fmt, ...);

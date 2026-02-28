@@ -125,6 +125,26 @@ void SessionManager::configure(const SessionConfig& config) {
                     enc->init(enc_cfg);
                     handle->encoder = std::move(enc);
                 }
+
+                // Pre-allocate send buffers
+                uint32_t frame_size_samples;
+                if (tc.codec == AudioCodec::Opus) {
+                    frame_size_samples =
+                        (tc.opus_frame_size_ms * tc.sample_rate) / 1000;
+                } else {
+                    frame_size_samples =
+                        (tc.pcm_frame_size_ms * tc.sample_rate) / 1000;
+                }
+                handle->pcm_read_buffer.resize(frame_size_samples * tc.channels);
+
+                if (tc.codec == AudioCodec::Opus) {
+                    handle->encode_output_buffer.resize(512);
+                } else {
+                    handle->encode_output_buffer.resize(
+                        frame_size_samples * tc.channels * sizeof(float));
+                }
+                handle->datagram_buffer.resize(
+                    34 + handle->encode_output_buffer.size());
             } else {
                 // Inbound audio: jitter buffer + optional decoder
                 JitterBufferConfig jb_cfg;
@@ -143,6 +163,10 @@ void SessionManager::configure(const SessionConfig& config) {
                     dec->init(dec_cfg);
                     handle->decoder = std::move(dec);
                 }
+
+                // Pre-allocate decode buffer: 960 per-channel samples
+                // covers up to 20ms @ 48kHz
+                handle->decode_buffer.resize(960 * tc.channels);
             }
         }
         // Data tracks: no buffers or codecs needed
@@ -232,13 +256,19 @@ void SessionManager::connect() {
 
     cb.on_datagram = [this](uint64_t track_alias, uint64_t /*group_id*/,
                              uint64_t /*object_id*/, uint8_t /*priority*/,
-                             const uint8_t* /*payload*/,
-                             int32_t /*payload_len*/) {
-        // Phase 4c will add decode + dispatch. For now just verify alias lookup.
+                             const uint8_t* payload,
+                             int32_t payload_len) {
         auto it = alias_map_.find(track_alias);
         if (it == alias_map_.end()) {
             log(LogLevel::Warn, "Datagram for unknown alias %llu",
                 static_cast<unsigned long long>(track_alias));
+            return;
+        }
+        TrackHandle* track = it->second;
+        if (track->config.type == TrackType::Audio) {
+            dispatch_audio_datagram(track, payload, payload_len);
+        } else {
+            dispatch_data_datagram(track, payload, payload_len);
         }
     };
 
@@ -284,12 +314,15 @@ void SessionManager::disconnect() {
     orchestration_started_ = false;
     first_subscribe_sent_ = false;
 
-    // Reset track MOQ state
+    // Reset track MOQ state and flush outbound ring buffers
     for (auto& t : tracks_) {
         t->moq_track_alias = 0;
         t->moq_request_id = 0;
         t->next_object_id = 0;
         t->next_group_id = 0;
+        if (t->ring_buffer) {
+            t->ring_buffer->flush();
+        }
     }
 
     state_.store(ConnectionState::Disconnected);
@@ -313,6 +346,11 @@ void SessionManager::session_thread_func() {
             if (!orchestration_started_ &&
                 transport_->state() == TransportState::Ready) {
                 start_orchestration();
+            }
+
+            // Poll outbound audio ring buffers → encode → send
+            if (state_.load() == ConnectionState::Connected) {
+                poll_outbound_tracks();
             }
         }
 
@@ -549,28 +587,175 @@ void SessionManager::handle_control_message(uint64_t message_type,
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4c stubs
+// Phase 4c: write_audio / read_audio / send_data
 // ---------------------------------------------------------------------------
 
-void SessionManager::write_audio(TrackHandle* /*track*/,
-                                  const float* /*samples*/,
-                                  uint32_t /*frame_count*/,
+void SessionManager::write_audio(TrackHandle* track,
+                                  const float* samples,
+                                  uint32_t frame_count,
                                   uint64_t /*host_time*/) {
-    // Phase 4c
+    if (!track || !track->ring_buffer) return;
+    if (track->config.type != TrackType::Audio) return;
+    if (track->config.direction != TrackDirection::Outbound) return;
+    track->ring_buffer->write(samples, frame_count);
 }
 
-uint32_t SessionManager::read_audio(TrackHandle* /*track*/,
-                                     float* /*buffer*/,
-                                     uint32_t /*frame_count*/,
+uint32_t SessionManager::read_audio(TrackHandle* track,
+                                     float* buffer,
+                                     uint32_t frame_count,
                                      uint64_t /*host_time*/) {
-    // Phase 4c
-    return 0;
+    if (!track || !track->jitter_buffer) return 0;
+    if (track->config.type != TrackType::Audio) return 0;
+    if (track->config.direction != TrackDirection::Inbound) return 0;
+    uint32_t float_count = frame_count * track->config.channels;
+    bool ok = track->jitter_buffer->read(buffer, float_count);
+    return ok ? frame_count : 0;
 }
 
-void SessionManager::send_data(TrackHandle* /*track*/,
-                                const uint8_t* /*data*/,
-                                uint32_t /*data_len*/) {
-    // Phase 4c
+void SessionManager::send_data(TrackHandle* track,
+                                const uint8_t* data,
+                                uint32_t data_len) {
+    if (!track || !transport_) return;
+    if (track->config.type != TrackType::Data) return;
+    if (track->moq_track_alias == 0) return;
+    if (state_.load() != ConnectionState::Connected) return;
+
+    auto dg = moq::build_object_datagram(
+        track->moq_track_alias, track->next_group_id,
+        track->next_object_id++, 128, data, data_len);
+    transport_->send_datagram(dg.data(), static_cast<uint32_t>(dg.size()));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4c: poll_outbound_tracks / send_audio_frame / send_pcm_frame
+// ---------------------------------------------------------------------------
+
+void SessionManager::poll_outbound_tracks() {
+    for (auto& t : tracks_) {
+        if (t->config.direction != TrackDirection::Outbound) continue;
+        if (t->config.type != TrackType::Audio) continue;
+        if (t->moq_track_alias == 0) continue;
+
+        if (t->config.codec == AudioCodec::Opus) {
+            send_audio_frame(t.get());
+        } else {
+            send_pcm_frame(t.get());
+        }
+    }
+}
+
+void SessionManager::send_audio_frame(TrackHandle* track) {
+    if (!track->encoder || !track->ring_buffer) return;
+
+    uint32_t frame_size = track->encoder->frame_size_samples();
+    while (track->ring_buffer->read_available() >= frame_size) {
+        // Read PCM from ring buffer
+        track->ring_buffer->read(track->pcm_read_buffer.data(), frame_size);
+
+        // Opus encode
+        int encoded_bytes = track->encoder->encode(
+            track->pcm_read_buffer.data(), frame_size,
+            track->encode_output_buffer.data(),
+            static_cast<uint32_t>(track->encode_output_buffer.size()));
+
+        if (encoded_bytes <= 0) continue;
+
+        // Build datagram header into pre-allocated buffer
+        int32_t header_len = moq::build_object_datagram_header(
+            track->moq_track_alias, track->next_group_id,
+            track->next_object_id, 128, track->datagram_buffer.data());
+
+        // Copy encoded payload after header
+        std::memcpy(track->datagram_buffer.data() + header_len,
+                     track->encode_output_buffer.data(), encoded_bytes);
+
+        // Send
+        transport_->send_datagram(
+            track->datagram_buffer.data(),
+            static_cast<uint32_t>(header_len + encoded_bytes));
+
+        track->next_object_id++;
+    }
+}
+
+void SessionManager::send_pcm_frame(TrackHandle* track) {
+    if (!track->ring_buffer) return;
+
+    uint32_t frame_size =
+        (track->config.pcm_frame_size_ms * track->config.sample_rate) / 1000;
+    while (track->ring_buffer->read_available() >= frame_size) {
+        // Read PCM from ring buffer
+        track->ring_buffer->read(track->pcm_read_buffer.data(), frame_size);
+
+        // Frame as bytes
+        uint32_t payload_bytes = pcm_frame(
+            track->pcm_read_buffer.data(), frame_size,
+            track->config.channels, track->encode_output_buffer.data());
+
+        // Build datagram header
+        int32_t header_len = moq::build_object_datagram_header(
+            track->moq_track_alias, track->next_group_id,
+            track->next_object_id, 128, track->datagram_buffer.data());
+
+        // Copy payload after header
+        std::memcpy(track->datagram_buffer.data() + header_len,
+                     track->encode_output_buffer.data(), payload_bytes);
+
+        // Send
+        transport_->send_datagram(
+            track->datagram_buffer.data(),
+            static_cast<uint32_t>(header_len + payload_bytes));
+
+        track->next_object_id++;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4c: dispatch_audio_datagram / dispatch_data_datagram
+// ---------------------------------------------------------------------------
+
+void SessionManager::dispatch_audio_datagram(TrackHandle* track,
+                                              const uint8_t* payload,
+                                              int32_t payload_len) {
+    if (!track->jitter_buffer) return;
+    if (payload_len <= 0) return;
+
+    if (track->config.codec == AudioCodec::Opus) {
+        if (!track->decoder) return;
+        int frames_decoded = track->decoder->decode(
+            payload, static_cast<uint32_t>(payload_len),
+            track->decode_buffer.data(),
+            static_cast<uint32_t>(track->decode_buffer.size() /
+                                   track->config.channels));
+
+        if (frames_decoded > 0) {
+            uint32_t float_count =
+                static_cast<uint32_t>(frames_decoded) * track->config.channels;
+            track->jitter_buffer->write(track->decode_buffer.data(),
+                                         float_count);
+        }
+    } else {
+        // PCM: unframe bytes → floats
+        uint32_t frames_decoded = pcm_unframe(
+            payload, static_cast<uint32_t>(payload_len),
+            track->decode_buffer.data(), track->config.channels);
+
+        if (frames_decoded > 0) {
+            uint32_t float_count = frames_decoded * track->config.channels;
+            track->jitter_buffer->write(track->decode_buffer.data(),
+                                         float_count);
+        }
+    }
+}
+
+void SessionManager::dispatch_data_datagram(TrackHandle* track,
+                                              const uint8_t* payload,
+                                              int32_t payload_len) {
+    if (config_.data_recv_callback && payload_len > 0) {
+        config_.data_recv_callback(
+            track, payload, static_cast<uint32_t>(payload_len),
+            config_.data_recv_ctx);
+    }
 }
 
 // ---------------------------------------------------------------------------

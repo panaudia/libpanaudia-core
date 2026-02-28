@@ -1,4 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
+#include <cstring>
 #include "panaudia/core.h"
 #include "panaudia/session_manager.h"
 
@@ -571,4 +573,272 @@ TEST_CASE("URL parsing: URL with trailing path", "[session][url]") {
     auto state = sm.get_connection_state();
     REQUIRE(state != ConnectionState::Disconnected);
     sm.disconnect();
+}
+
+// ---- Phase 4c: write_audio / read_audio / send_data ----
+
+TEST_CASE("write_audio writes to ring buffer", "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+    auto* mic = sm.get_track("mic");
+    REQUIRE(mic != nullptr);
+    REQUIRE(mic->ring_buffer != nullptr);
+
+    // Write 480 mono frames
+    std::vector<float> pcm(480, 0.5f);
+    sm.write_audio(mic, pcm.data(), 480, 0);
+
+    REQUIRE(mic->ring_buffer->read_available() == 480);
+}
+
+TEST_CASE("write_audio with nullptr/inbound/data track is no-op", "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+
+    float dummy[240] = {};
+
+    // nullptr
+    sm.write_audio(nullptr, dummy, 240, 0);
+
+    // inbound audio track
+    auto* speaker = sm.get_track("speaker");
+    sm.write_audio(speaker, dummy, 240, 0);
+    // speaker has no ring buffer, should not crash
+
+    // data track
+    auto* data_track = sm.get_track("state_out");
+    sm.write_audio(data_track, dummy, 240, 0);
+    // no ring buffer, should not crash
+}
+
+TEST_CASE("read_audio returns 0 on empty jitter buffer", "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+    auto* speaker = sm.get_track("speaker");
+    REQUIRE(speaker != nullptr);
+    REQUIRE(speaker->jitter_buffer != nullptr);
+
+    float buffer[480] = {};
+    uint32_t frames_read = sm.read_audio(speaker, buffer, 480, 0);
+
+    // Jitter buffer is in FILLING state, returns silence (0 frames)
+    REQUIRE(frames_read == 0);
+}
+
+TEST_CASE("read_audio with nullptr/outbound/data track returns 0", "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+
+    float buffer[240] = {};
+
+    // nullptr
+    REQUIRE(sm.read_audio(nullptr, buffer, 240, 0) == 0);
+
+    // outbound audio track
+    auto* mic = sm.get_track("mic");
+    REQUIRE(sm.read_audio(mic, buffer, 240, 0) == 0);
+
+    // data track
+    auto* data_track = sm.get_track("control_in");
+    REQUIRE(sm.read_audio(data_track, buffer, 240, 0) == 0);
+}
+
+TEST_CASE("send_data with no transport/zero alias is no-op", "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+
+    auto* state_out = sm.get_track("state_out");
+    uint8_t data[] = {1, 2, 3};
+
+    // No transport (not connected), zero alias — should not crash
+    sm.send_data(state_out, data, sizeof(data));
+
+    // nullptr track
+    sm.send_data(nullptr, data, sizeof(data));
+}
+
+TEST_CASE("Outbound Opus track has correct pre-allocated buffer sizes",
+          "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+    auto* mic = sm.get_track("mic");
+    REQUIRE(mic != nullptr);
+
+    // 5ms @ 48kHz mono = 240 samples
+    REQUIRE(mic->pcm_read_buffer.size() == 240);
+    REQUIRE(mic->encode_output_buffer.size() == 512);
+    REQUIRE(mic->datagram_buffer.size() == 546);  // 34 + 512
+
+    // Inbound buffers should be empty
+    REQUIRE(mic->decode_buffer.empty());
+}
+
+TEST_CASE("Outbound PCM track has correct pre-allocated buffer sizes",
+          "[session][4c]") {
+    SessionConfig config;
+    config.server_url = "https://test.panaudia.com";
+    config.jwt = "test-token";
+
+    TrackConfig pcm_out;
+    pcm_out.name = "pcm_mic";
+    pcm_out.moq_namespace = {"test"};
+    pcm_out.direction = TrackDirection::Outbound;
+    pcm_out.type = TrackType::Audio;
+    pcm_out.channels = 1;
+    pcm_out.sample_rate = 48000;
+    pcm_out.codec = AudioCodec::PCM;
+    pcm_out.pcm_frame_size_ms = 5;
+    config.tracks.push_back(pcm_out);
+
+    SessionManager sm;
+    sm.configure(config);
+    auto* track = sm.get_track("pcm_mic");
+    REQUIRE(track != nullptr);
+
+    // 5ms @ 48kHz mono = 240 samples
+    REQUIRE(track->pcm_read_buffer.size() == 240);
+    REQUIRE(track->encode_output_buffer.size() == 960);  // 240 * 1 * 4
+    REQUIRE(track->datagram_buffer.size() == 994);        // 34 + 960
+
+    REQUIRE(track->decode_buffer.empty());
+}
+
+TEST_CASE("Inbound audio track has pre-allocated decode buffer",
+          "[session][4c]") {
+    // Mono
+    {
+        SessionManager sm;
+        sm.configure(make_test_config());
+        auto* speaker = sm.get_track("speaker");
+        REQUIRE(speaker != nullptr);
+        REQUIRE(speaker->decode_buffer.size() == 960);  // 960 * 1 channel
+    }
+
+    // Stereo
+    {
+        SessionConfig config;
+        config.server_url = "https://test.panaudia.com";
+        config.jwt = "test-token";
+        config.jitter_buffer_min_ms = 10;
+        config.jitter_buffer_max_ms = 200;
+        config.jitter_buffer_initial_ms = 60;
+
+        TrackConfig stereo_in;
+        stereo_in.name = "stereo_speaker";
+        stereo_in.moq_namespace = {"test"};
+        stereo_in.direction = TrackDirection::Inbound;
+        stereo_in.type = TrackType::Audio;
+        stereo_in.channels = 2;
+        stereo_in.sample_rate = 48000;
+        stereo_in.codec = AudioCodec::Opus;
+        config.tracks.push_back(stereo_in);
+
+        SessionManager sm;
+        sm.configure(config);
+        auto* track = sm.get_track("stereo_speaker");
+        REQUIRE(track != nullptr);
+        REQUIRE(track->decode_buffer.size() == 1920);  // 960 * 2 channels
+    }
+}
+
+TEST_CASE("Data tracks have no pre-allocated buffers", "[session][4c]") {
+    SessionManager sm;
+    sm.configure(make_test_config());
+
+    auto* state_out = sm.get_track("state_out");
+    REQUIRE(state_out->pcm_read_buffer.empty());
+    REQUIRE(state_out->encode_output_buffer.empty());
+    REQUIRE(state_out->datagram_buffer.empty());
+    REQUIRE(state_out->decode_buffer.empty());
+
+    auto* ctrl = sm.get_track("control_in");
+    REQUIRE(ctrl->pcm_read_buffer.empty());
+    REQUIRE(ctrl->encode_output_buffer.empty());
+    REQUIRE(ctrl->datagram_buffer.empty());
+    REQUIRE(ctrl->decode_buffer.empty());
+}
+
+TEST_CASE("Opus encode-decode round trip through track buffers",
+          "[session][4c]") {
+    // Set up outbound + inbound Opus tracks
+    SessionConfig config;
+    config.server_url = "https://test.panaudia.com";
+    config.jwt = "test-token";
+    config.jitter_buffer_min_ms = 10;
+    config.jitter_buffer_max_ms = 200;
+    config.jitter_buffer_initial_ms = 20;
+
+    TrackConfig mic;
+    mic.name = "mic";
+    mic.moq_namespace = {"test"};
+    mic.direction = TrackDirection::Outbound;
+    mic.type = TrackType::Audio;
+    mic.channels = 1;
+    mic.sample_rate = 48000;
+    mic.codec = AudioCodec::Opus;
+    mic.opus_bitrate = 64000;
+    mic.opus_frame_size_ms = 5;
+    config.tracks.push_back(mic);
+
+    TrackConfig speaker;
+    speaker.name = "speaker";
+    speaker.moq_namespace = {"test"};
+    speaker.direction = TrackDirection::Inbound;
+    speaker.type = TrackType::Audio;
+    speaker.channels = 1;
+    speaker.sample_rate = 48000;
+    speaker.codec = AudioCodec::Opus;
+    config.tracks.push_back(speaker);
+
+    SessionManager sm;
+    sm.configure(config);
+    auto* mic_h = sm.get_track("mic");
+    auto* spk_h = sm.get_track("speaker");
+    REQUIRE(mic_h != nullptr);
+    REQUIRE(spk_h != nullptr);
+
+    // Generate a 5ms 440Hz sine wave (240 samples @ 48kHz)
+    constexpr uint32_t frame_size = 240;
+    std::vector<float> sine(frame_size);
+    for (uint32_t i = 0; i < frame_size; i++) {
+        sine[i] = 0.5f * std::sin(2.0f * 3.14159265f * 440.0f *
+                                    static_cast<float>(i) / 48000.0f);
+    }
+
+    // Encode using the outbound track's encoder
+    REQUIRE(mic_h->encoder != nullptr);
+    std::vector<uint8_t> encoded(512);
+    int enc_bytes = mic_h->encoder->encode(
+        sine.data(), frame_size, encoded.data(),
+        static_cast<uint32_t>(encoded.size()));
+    REQUIRE(enc_bytes > 0);
+
+    // Decode using the inbound track's decoder → into its decode_buffer
+    REQUIRE(spk_h->decoder != nullptr);
+    int dec_frames = spk_h->decoder->decode(
+        encoded.data(), static_cast<uint32_t>(enc_bytes),
+        spk_h->decode_buffer.data(),
+        static_cast<uint32_t>(spk_h->decode_buffer.size()));
+    REQUIRE(dec_frames == static_cast<int>(frame_size));
+
+    // Write decoded audio into jitter buffer — prime it
+    // Need enough to transition from FILLING to PLAYING
+    // target_latency = 20ms = 960 samples. Write 4 frames (4 * 240 = 960).
+    for (int i = 0; i < 4; i++) {
+        spk_h->jitter_buffer->write(spk_h->decode_buffer.data(),
+                                     static_cast<uint32_t>(dec_frames));
+    }
+
+    // read_audio should now return audio (jitter buffer transitioned to PLAYING)
+    std::vector<float> output(frame_size, 0.0f);
+    uint32_t frames_read = sm.read_audio(spk_h, output.data(), frame_size, 0);
+    REQUIRE(frames_read == frame_size);
+
+    // Verify output is not all zeros (lossy codec, so we just check non-silence).
+    // First frame after Opus init has lower amplitude due to codec startup.
+    float sum = 0.0f;
+    for (uint32_t i = 0; i < frame_size; i++) {
+        sum += std::fabs(output[i]);
+    }
+    REQUIRE(sum > 0.01f);
 }
