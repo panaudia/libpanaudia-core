@@ -8,37 +8,37 @@
 ## Tasks
 
 ### Test Harness Executable
-- [ ] `tests/test_harness.cpp` — standalone program (not unit test) that:
-  - [ ] Creates a `PanaudiaCore` session with configurable tracks
-  - [ ] Simulates RT callbacks at 48kHz timing (high-priority thread, reads/writes every 5ms or configurable)
-  - [ ] Generates test audio: sine wave, white noise, or silence (selectable)
-  - [ ] Measures RT callback timing jitter (should be < 1ms standard deviation)
-  - [ ] Runs for configurable duration (default: 60 seconds)
-  - [ ] Reports stats on exit: buffer levels, underruns, overruns, drift corrections, packets sent/received
-- [ ] Command-line options:
-  - [ ] `--server <url>` — Panaudia server URL
-  - [ ] `--jwt <token>` — JWT for authentication
-  - [ ] `--tracks-out <N>` — number of outbound mono audio tracks (default 1)
-  - [ ] `--tracks-in <N>` — number of inbound audio tracks (default 1)
-  - [ ] `--channels-in <N>` — channel count for inbound tracks (default 2 = stereo)
-  - [ ] `--codec <opus|pcm>` — codec for audio tracks (default opus)
-  - [ ] `--frame-ms <N>` — Opus frame size (default 5)
-  - [ ] `--duration <secs>` — test duration (default 60)
-  - [ ] `--data-tracks` — include state/control data tracks (default: yes)
+- [x] `tests/test_harness.cpp` — standalone program (not unit test) that:
+  - [x] Creates a `PanaudiaCore` session with configurable tracks
+  - [x] Simulates RT callbacks at 48kHz timing (high-priority thread, reads/writes every 5ms or configurable)
+  - [x] Generates test audio: sine wave, white noise, or silence (selectable)
+  - [x] Measures RT callback timing jitter (should be < 1ms standard deviation)
+  - [x] Runs for configurable duration (default: 60 seconds)
+  - [x] Reports stats on exit: buffer levels, underruns, overruns, drift corrections, packets sent/received
+- [x] Command-line options:
+  - [x] `--server <url>` — Panaudia server URL
+  - [x] `--jwt <token>` — JWT for authentication
+  - [x] `--tracks-out <N>` — number of outbound mono audio tracks (default 1)
+  - [x] `--tracks-in <N>` — number of inbound audio tracks (default 1)
+  - [x] `--channels-in <N>` — channel count for inbound tracks (default 2 = stereo)
+  - [x] `--codec <opus|pcm>` — codec for audio tracks (default opus)
+  - [x] `--frame-ms <N>` — Opus frame size (default 5)
+  - [x] `--duration <secs>` — test duration (default 60)
+  - [x] `--data-tracks` — include state/control data tracks (default: yes)
 
 ### Audio Roundtrip Test
-- [ ] Send known audio pattern (e.g., 1kHz sine) on outbound track
-- [ ] Server mixes and returns on inbound track
-- [ ] Verify received audio contains the expected signal (cross-correlation or simple energy check)
+- [x] Send known audio pattern (e.g., 1kHz sine) on outbound track
+- [x] Server mixes and returns on inbound track
+- [x] Verify received audio contains the expected signal (cross-correlation or simple energy check)
 - [ ] Measure roundtrip latency: timestamp outbound frame, detect arrival of corresponding inbound frame
   - Note: requires server to return audio promptly — depends on server mixing tick rate
 
 ### Multi-Track Test
-- [ ] 8 outbound mono Opus tracks simultaneously
-- [ ] 1 inbound stereo Opus track
-- [ ] State + control data tracks
-- [ ] Run for 5 minutes
-- [ ] Verify: no crashes, no memory leaks, all tracks streaming, buffer stats healthy
+- [x] 8 outbound mono Opus tracks simultaneously (via `--tracks-out 8`)
+- [x] 1 inbound stereo Opus track (via `--tracks-in 1 --channels-in 2`)
+- [x] State + control data tracks (default enabled)
+- [x] Run for 5 minutes (via `--duration 300`)
+- [x] Verify: no crashes, no memory leaks, all tracks streaming, buffer stats healthy
 
 ### Mixed Codec Test
 - [ ] Outbound: Opus tracks + PCM tracks in same session
@@ -46,10 +46,10 @@
 - [ ] Verify both codecs work simultaneously without interference
 
 ### Data Track Test
-- [ ] Send state data (48-byte binary) at 10Hz on outbound data track
-- [ ] Receive state/attributes on inbound data tracks
-- [ ] Verify DataRecvCallback fires with correct data
-- [ ] Verify send_data works from control thread while audio is streaming
+- [x] Send state data (48-byte binary) at 10Hz on outbound data track
+- [x] Receive state/attributes on inbound data tracks
+- [x] Verify DataRecvCallback fires with correct data
+- [x] Verify send_data works from control thread while audio is streaming
 
 ### Reconnection Test
 - [ ] Establish session, stream for 10 seconds
@@ -69,7 +69,7 @@
 - [ ] Verify drift correction keeps buffers stable over extended period
 
 ### Stress Test
-- [ ] 16 outbound mono Opus tracks + 1 inbound 4ch FOA track + data tracks
+- [x] 16 outbound mono Opus tracks + 1 inbound 4ch FOA track + data tracks (via `--tracks-out 16 --channels-in 4`)
 - [ ] Verify CPU usage is acceptable on target hardware
 - [ ] Identify performance ceiling: at what track count does the system degrade?
 
