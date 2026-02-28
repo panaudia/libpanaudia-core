@@ -8,38 +8,38 @@
 ## Tasks
 
 ### TrackHandle Implementation
-- [ ] Define `TrackHandle` as an opaque struct containing:
+- [x] Define `TrackHandle` as an opaque struct containing:
   - `TrackConfig` (copy of the config from SessionConfig)
   - `TrackType` / `TrackDirection` (for dispatch)
   - MOQ track alias (assigned by server via SUBSCRIBE_OK, or by us for published tracks)
   - For outbound audio: pointer to `RingBuffer`
   - For inbound audio: pointer to `JitterBuffer`
   - For data tracks: no buffer (direct send/callback)
-- [ ] Name → handle lookup: `std::unordered_map<std::string, TrackHandle>`
-- [ ] TrackAlias → handle lookup: `std::unordered_map<uint64_t, TrackHandle*>` (for incoming datagram dispatch)
+- [x] Name → handle lookup: `std::unordered_map<std::string, TrackHandle>`
+- [x] TrackAlias → handle lookup: `std::unordered_map<uint64_t, TrackHandle*>` (for incoming datagram dispatch)
 
 ### Session Manager
-- [ ] `session_manager.h` / `session_manager.cpp`
-- [ ] `configure(const SessionConfig& config)`:
-  - [ ] Create TrackHandle for each track in config
-  - [ ] For outbound audio tracks: create `RingBuffer`
-  - [ ] For inbound audio tracks: create `JitterBuffer` (configured from session jitter settings)
-  - [ ] For data tracks: no buffer creation
-  - [ ] Build name→handle map
-  - [ ] Store callbacks (DataRecvCallback, StatusCallback, LogCallback)
-- [ ] `connect()`:
-  - [ ] Call `MoqTransport::connect(url, jwt)`
-  - [ ] For each outbound track: ANNOUNCE namespace, then wait for server SUBSCRIBE
-  - [ ] For each inbound track: SUBSCRIBE to namespace
-  - [ ] Build TrackAlias→handle map as SUBSCRIBE_OKs arrive
+- [x] `session_manager.h` / `session_manager.cpp`
+- [x] `configure(const SessionConfig& config)`:
+  - [x] Create TrackHandle for each track in config
+  - [x] For outbound audio tracks: create `RingBuffer`
+  - [x] For inbound audio tracks: create `JitterBuffer` (configured from session jitter settings)
+  - [x] For data tracks: no buffer creation
+  - [x] Build name→handle map
+  - [x] Store callbacks (DataRecvCallback, StatusCallback, LogCallback)
+- [x] `connect()`:
+  - [x] Call `MoqTransport::connect(url, jwt)`
+  - [x] For each outbound track: ANNOUNCE namespace, then wait for server SUBSCRIBE
+  - [x] For each inbound track: SUBSCRIBE to namespace
+  - [x] Build TrackAlias→handle map as SUBSCRIBE_OKs arrive
   - [ ] Start send/recv worker threads
-  - [ ] Report `ConnectionState::Connected` via StatusCallback
-- [ ] `disconnect()`:
+  - [x] Report `ConnectionState::Connected` via StatusCallback
+- [x] `disconnect()`:
   - [ ] Stop send/recv worker threads
-  - [ ] Call `MoqTransport::disconnect()`
-  - [ ] Report `ConnectionState::Disconnected` via StatusCallback
-- [ ] `get_track(name)`: lookup in name→handle map, return pointer (or nullptr)
-- [ ] `update_jwt(jwt)`: store for next reconnect, pass to transport if it supports hot update
+  - [x] Call `MoqTransport::disconnect()`
+  - [x] Report `ConnectionState::Disconnected` via StatusCallback
+- [x] `get_track(name)`: lookup in name→handle map, return pointer (or nullptr)
+- [x] `update_jwt(jwt)`: store for next reconnect, pass to transport if it supports hot update
 
 ### Send Workers (Outbound Audio)
 - [ ] One thread per outbound audio track
@@ -90,20 +90,20 @@
   - [ ] On max retries or fatal error: report `ConnectionState::Failed`
 
 ### Status & Stats
-- [ ] `get_connection_state()` — atomic read of current state
-- [ ] `get_buffer_status(handle)` — query the track's ring/jitter buffer stats
-- [ ] `get_stats()` — aggregate: bytes sent/received, packets, loss, RTT (from msquic)
+- [x] `get_connection_state()` — atomic read of current state
+- [x] `get_buffer_status(handle)` — query the track's ring/jitter buffer stats
+- [x] `get_stats()` — aggregate: bytes sent/received, packets, loss, RTT (from msquic)
 
 ### LogCallback Routing
-- [ ] Internal log macro/function that routes to `LogCallback` if set
-- [ ] Log level filtering (only call callback if level ≥ configured minimum)
-- [ ] Called from any thread — callback must be thread-safe (host's responsibility)
-- [ ] Key log points: connect/disconnect, subscribe/announce, datagram errors, buffer state changes
+- [x] Internal log macro/function that routes to `LogCallback` if set
+- [x] Log level filtering (only call callback if level ≥ configured minimum)
+- [x] Called from any thread — callback must be thread-safe (host's responsibility)
+- [x] Key log points: connect/disconnect, subscribe/announce, datagram errors, buffer state changes
 
 ### PanaudiaCore Facade
-- [ ] `panaudia_core.cpp` — thin wrapper delegating to SessionManager
-- [ ] Thread safety: control methods (configure, connect, disconnect, send_data) must not be called concurrently — document as host's responsibility
-- [ ] RT methods (write_audio, read_audio) are lock-free by design
+- [x] `panaudia_core.cpp` — thin wrapper delegating to SessionManager
+- [x] Thread safety: control methods (configure, connect, disconnect, send_data) must not be called concurrently — document as host's responsibility
+- [x] RT methods (write_audio, read_audio) are lock-free by design
 
 ## Done When
 - `PanaudiaCore` API is fully functional

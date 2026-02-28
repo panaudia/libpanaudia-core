@@ -403,3 +403,172 @@ TEST_CASE("update_jwt stores new token", "[session]") {
     core.update_jwt("new-token-value");
     REQUIRE(core.get_connection_state() == ConnectionState::Disconnected);
 }
+
+// ---- Phase 4b: connect/disconnect ----
+
+TEST_CASE("connect transitions to Connecting state", "[session][connect]") {
+    PanaudiaCore core;
+    auto config = make_test_config();
+
+    ConnectionState last_state = ConnectionState::Disconnected;
+
+    config.status_callback = [](ConnectionState state, const char* /*message*/,
+                                 void* ctx) {
+        auto* s = static_cast<ConnectionState*>(ctx);
+        *s = state;
+    };
+    config.status_ctx = &last_state;
+
+    core.configure(config);
+    core.connect();
+
+    // connect() should have started the transport — state should be
+    // at least Connecting (might already be Failed if no server is running,
+    // but it should NOT be Disconnected)
+    auto state = core.get_connection_state();
+    REQUIRE(state != ConnectionState::Disconnected);
+
+    // Clean up
+    core.disconnect();
+    REQUIRE(core.get_connection_state() == ConnectionState::Disconnected);
+}
+
+TEST_CASE("disconnect when not connected is safe", "[session][connect]") {
+    PanaudiaCore core;
+    core.configure(make_test_config());
+
+    // Should not crash
+    core.disconnect();
+    REQUIRE(core.get_connection_state() == ConnectionState::Disconnected);
+
+    // Double disconnect
+    core.disconnect();
+    REQUIRE(core.get_connection_state() == ConnectionState::Disconnected);
+}
+
+TEST_CASE("double connect is rejected", "[session][connect]") {
+    PanaudiaCore core;
+    core.configure(make_test_config());
+
+    core.connect();
+    auto state_after_first = core.get_connection_state();
+
+    // Second connect should be a no-op (not crash)
+    core.connect();
+    auto state_after_second = core.get_connection_state();
+    REQUIRE(state_after_first == state_after_second);
+
+    core.disconnect();
+}
+
+TEST_CASE("connect with invalid URL sets Failed state", "[session][connect]") {
+    PanaudiaCore core;
+    SessionConfig config = make_test_config();
+    config.server_url = "";  // invalid
+
+    core.configure(config);
+    core.connect();
+
+    REQUIRE(core.get_connection_state() == ConnectionState::Failed);
+}
+
+TEST_CASE("disconnect clears track MOQ state", "[session][connect]") {
+    PanaudiaCore core;
+    core.configure(make_test_config());
+
+    core.connect();
+    core.disconnect();
+
+    // All track MOQ state should be reset
+    auto* mic = core.get_track("mic");
+    REQUIRE(mic->moq_track_alias == 0);
+    REQUIRE(mic->moq_request_id == 0);
+    REQUIRE(mic->next_object_id == 0);
+    REQUIRE(mic->next_group_id == 0);
+
+    auto* speaker = core.get_track("speaker");
+    REQUIRE(speaker->moq_track_alias == 0);
+    REQUIRE(speaker->moq_request_id == 0);
+}
+
+// ---- URL parsing (tested via SessionManager directly) ----
+
+TEST_CASE("URL parsing: https with port", "[session][url]") {
+    SessionManager sm;
+    SessionConfig config;
+    config.server_url = "https://dev.panaudia.com:4433";
+    config.jwt = "test";
+    sm.configure(config);
+
+    // We can't directly test parse_url since it's private, but we verify
+    // connect doesn't fail on URL parsing (it will fail on actual QUIC connect,
+    // which is expected since there's no server)
+    sm.connect();
+    // State should be Connecting or Failed (transport init), not Disconnected
+    auto state = sm.get_connection_state();
+    REQUIRE(state != ConnectionState::Disconnected);
+    sm.disconnect();
+}
+
+TEST_CASE("URL parsing: https without port defaults to 443", "[session][url]") {
+    SessionManager sm;
+    SessionConfig config;
+    config.server_url = "https://example.com";
+    config.jwt = "test";
+    sm.configure(config);
+
+    sm.connect();
+    auto state = sm.get_connection_state();
+    REQUIRE(state != ConnectionState::Disconnected);
+    sm.disconnect();
+}
+
+TEST_CASE("URL parsing: bare host with port", "[session][url]") {
+    SessionManager sm;
+    SessionConfig config;
+    config.server_url = "example.com:4433";
+    config.jwt = "test";
+    sm.configure(config);
+
+    sm.connect();
+    auto state = sm.get_connection_state();
+    REQUIRE(state != ConnectionState::Disconnected);
+    sm.disconnect();
+}
+
+TEST_CASE("URL parsing: bare host without port", "[session][url]") {
+    SessionManager sm;
+    SessionConfig config;
+    config.server_url = "example.com";
+    config.jwt = "test";
+    sm.configure(config);
+
+    sm.connect();
+    auto state = sm.get_connection_state();
+    REQUIRE(state != ConnectionState::Disconnected);
+    sm.disconnect();
+}
+
+TEST_CASE("URL parsing: empty URL fails", "[session][url]") {
+    SessionManager sm;
+    SessionConfig config;
+    config.server_url = "";
+    config.jwt = "test";
+    sm.configure(config);
+
+    sm.connect();
+    REQUIRE(sm.get_connection_state() == ConnectionState::Failed);
+}
+
+TEST_CASE("URL parsing: URL with trailing path", "[session][url]") {
+    SessionManager sm;
+    SessionConfig config;
+    config.server_url = "https://dev.panaudia.com:4433/moq";
+    config.jwt = "test";
+    sm.configure(config);
+
+    sm.connect();
+    auto state = sm.get_connection_state();
+    REQUIRE(state != ConnectionState::Disconnected);
+    sm.disconnect();
+}

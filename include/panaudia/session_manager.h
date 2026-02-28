@@ -2,11 +2,14 @@
 
 #include "panaudia/core.h"
 #include "panaudia/jitter_buffer.h"
+#include "panaudia/moq_transport.h"
 #include "panaudia/opus_codec.h"
 #include "panaudia/ring_buffer.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -81,9 +84,35 @@ private:
     SessionConfig config_;
     std::vector<std::unique_ptr<TrackHandle>> tracks_;
     std::unordered_map<std::string, TrackHandle*> name_map_;
-    ConnectionState state_ = ConnectionState::Disconnected;
+    std::atomic<ConnectionState> state_{ConnectionState::Disconnected};
 
-    // Phase 4b adds: alias_map_, transport_, session_thread_
+    // Transport
+    std::unique_ptr<MoqTransport> transport_;
+
+    // Session thread — polls process_incoming() and drives orchestration
+    std::unique_ptr<std::thread> session_thread_;
+    std::atomic<bool> session_running_{false};
+
+    // MOQ orchestration state
+    uint64_t next_request_id_ = 0;      // even sequence: 0, 2, 4, ...
+    uint64_t next_track_alias_ = 1;     // for incoming SUBSCRIBEs (we assign)
+    std::unordered_map<uint64_t, TrackHandle*> request_id_map_;   // our SUBSCRIBE req_id → handle
+    std::unordered_map<uint64_t, TrackHandle*> alias_map_;        // track_alias → handle
+    bool orchestration_started_ = false;
+    bool first_subscribe_sent_ = false;  // tracks whether JWT has been attached
+
+    // URL parsing
+    static bool parse_url(const std::string& url,
+                          std::string& host, uint16_t& port);
+
+    // Orchestration
+    void session_thread_func();
+    void start_orchestration();
+    void handle_control_message(uint64_t message_type,
+                                const uint8_t* content, int32_t content_len);
+
+    // Logging
+    void log(LogLevel level, const char* fmt, ...);
 };
 
 }  // namespace panaudia
