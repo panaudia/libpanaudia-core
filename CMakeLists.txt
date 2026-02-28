@@ -5,8 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Warnings
-add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
+# Warnings — applied per-target below (not globally, to avoid polluting msquic/opus builds)
 
 # --- Dependencies (via FetchContent) ---
 
@@ -23,12 +22,16 @@ FetchContent_MakeAvailable(Catch2)
 
 # msquic — QUIC transport (needed from Phase 3)
 # Pinned to same commit as UE plugin: v2.6.0
-# FetchContent_Declare(
-#     msquic
-#     GIT_REPOSITORY https://github.com/microsoft/msquic.git
-#     GIT_TAG ed14762f5d55d938aad1c99cbcb287713a0f1e2f
-# )
-# FetchContent_MakeAvailable(msquic)
+set(QUIC_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(QUIC_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(QUIC_BUILD_PERF OFF CACHE BOOL "" FORCE)
+set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    msquic
+    GIT_REPOSITORY https://github.com/microsoft/msquic.git
+    GIT_TAG ed14762f5d55d938aad1c99cbcb287713a0f1e2f
+)
+FetchContent_MakeAvailable(msquic)
 
 # libopus — audio codec
 FetchContent_Declare(
@@ -59,9 +62,18 @@ target_include_directories(panaudia-core
         $<INSTALL_INTERFACE:include>
 )
 
+target_compile_options(panaudia-core PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+
+# msquic only exposes headers via INSTALL_INTERFACE, so add BUILD_INTERFACE manually
+target_include_directories(panaudia-core
+    PRIVATE
+        ${msquic_SOURCE_DIR}/src/inc
+)
+
 target_link_libraries(panaudia-core
     PRIVATE
         Opus::opus
+        msquic
 )
 
 # --- Tests ---
@@ -71,8 +83,11 @@ add_executable(panaudia-core-tests
     tests/test_jitter_buffer.cpp
     tests/test_opus_codec.cpp
     tests/test_moq_protocol.cpp
+    tests/test_moq_transport.cpp
     tests/test_session.cpp
 )
+
+target_compile_options(panaudia-core-tests PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 
 target_link_libraries(panaudia-core-tests
     PRIVATE
@@ -91,6 +106,8 @@ add_executable(panaudia-bench
     tests/bench_codec.cpp
 )
 
+target_compile_options(panaudia-bench PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+
 target_link_libraries(panaudia-bench
     PRIVATE
         panaudia-core
@@ -102,6 +119,8 @@ target_link_libraries(panaudia-bench
 add_executable(panaudia-test-harness
     tests/test_harness.cpp
 )
+
+target_compile_options(panaudia-test-harness PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 
 target_link_libraries(panaudia-test-harness
     PRIVATE

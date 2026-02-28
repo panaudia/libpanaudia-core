@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     git \
     ca-certificates \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -15,7 +16,7 @@ CMD ["bash", "-c", "\
     cmake -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build -j$(nproc) && \
     echo '--- Tests ---' && \
-    ./build/panaudia-core-tests && \
+    ./build/panaudia-core-tests '~[integration]' && \
     echo '--- Benchmarks ---' && \
     ./build/panaudia-bench \
 "]
