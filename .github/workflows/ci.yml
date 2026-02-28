@@ -16,8 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: fc-cache
+          key: fc-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DFETCHCONTENT_BASE_DIR=${{ github.workspace }}/fc-cache
 
       - name: Build
         run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
@@ -34,8 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: fc-cache
+          key: fc-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Configure with TSan
-        run: cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+        run: cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" -DFETCHCONTENT_BASE_DIR=${{ github.workspace }}/fc-cache
 
       - name: Build
         run: cmake --build build-tsan -j$(nproc)
