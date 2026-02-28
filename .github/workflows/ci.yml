@@ -29,7 +29,9 @@ jobs:
         run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
       - name: Test
-        run: ./build/panaudia-core-tests '~[integration]'
+        # Exclude [4d] reconnection tests: QUIC/UDP to closed ports on CI runners
+        # doesn't get immediate connection refused — msquic waits for idle timeout
+        run: ./build/panaudia-core-tests '~[integration]~[4d]'
 
       - name: Benchmark
         run: ./build/panaudia-bench
@@ -56,4 +58,4 @@ jobs:
         # Exclude [stress] tests: concurrent SPSC ring buffer operations
         # produce TSan false positives on data_[] (TSan can't reason about
         # the SPSC invariant that writer and reader access disjoint regions).
-        run: ./build-tsan/panaudia-core-tests '~[stress]' '~[integration]'
+        run: ./build-tsan/panaudia-core-tests '~[stress]' '~[integration]' '~[4d]'
