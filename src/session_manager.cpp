@@ -558,7 +558,6 @@ void SessionManager::session_thread_func() {
 
 void SessionManager::start_orchestration() {
     orchestration_started_ = true;
-    log(LogLevel::Info, "Starting MOQ orchestration");
 
     // SUBSCRIBE to each inbound track
     for (auto& t : tracks_) {
@@ -579,9 +578,7 @@ void SessionManager::start_orchestration() {
             request_id_map_[next_request_id_] = t.get();
             next_request_id_ += 2;  // even sequence
 
-            auto msg = moq::build_subscribe(sub);
-            auto framed = moq::build_control_message(
-                moq::MessageType::Subscribe, msg);
+            auto framed = moq::build_subscribe(sub);
             transport_->send_control(framed.data(),
                                      static_cast<uint32_t>(framed.size()));
 
@@ -602,9 +599,7 @@ void SessionManager::start_orchestration() {
             request_id_map_[next_request_id_] = t.get();
             next_request_id_ += 2;
 
-            auto msg = moq::build_announce(ann);
-            auto framed = moq::build_control_message(
-                moq::MessageType::Announce, msg);
+            auto framed = moq::build_announce(ann);
             transport_->send_control(framed.data(),
                                      static_cast<uint32_t>(framed.size()));
 
@@ -639,8 +634,9 @@ void SessionManager::handle_control_message(uint64_t message_type,
             handle->moq_track_alias = result.track_alias;
             alias_map_[result.track_alias] = handle;
             log(LogLevel::Info,
-                "SUBSCRIBE_OK: track '%s' alias=%llu",
+                "SUBSCRIBE_OK: track '%s' req_id=%llu alias=%llu",
                 handle->config.name.c_str(),
+                static_cast<unsigned long long>(result.request_id),
                 static_cast<unsigned long long>(result.track_alias));
         } else {
             log(LogLevel::Warn,
@@ -697,9 +693,7 @@ void SessionManager::handle_control_message(uint64_t message_type,
             ok.request_id = result.request_id;
             ok.track_alias = alias;
 
-            auto msg = moq::build_subscribe_ok(ok);
-            auto framed = moq::build_control_message(
-                moq::MessageType::SubscribeOk, msg);
+            auto framed = moq::build_subscribe_ok(ok);
             transport_->send_control(framed.data(),
                                      static_cast<uint32_t>(framed.size()));
 
@@ -722,9 +716,7 @@ void SessionManager::handle_control_message(uint64_t message_type,
             break;
         }
 
-        auto msg = moq::build_announce_ok(result.request_id);
-        auto framed = moq::build_control_message(
-            moq::MessageType::AnnounceOk, msg);
+        auto framed = moq::build_announce_ok(result.request_id);
         transport_->send_control(framed.data(),
                                  static_cast<uint32_t>(framed.size()));
 
@@ -758,9 +750,7 @@ void SessionManager::handle_control_message(uint64_t message_type,
             break;
         }
 
-        auto msg = moq::build_subscribe_announces_ok(result.request_id);
-        auto framed = moq::build_control_message(
-            moq::MessageType::SubscribeAnnouncesOk, msg);
+        auto framed = moq::build_subscribe_announces_ok(result.request_id);
         transport_->send_control(framed.data(),
                                  static_cast<uint32_t>(framed.size()));
 

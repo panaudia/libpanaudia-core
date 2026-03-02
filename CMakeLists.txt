@@ -22,6 +22,7 @@ FetchContent_MakeAvailable(Catch2)
 
 # msquic — QUIC transport (needed from Phase 3)
 # Pinned to same commit as UE plugin: v2.6.0
+set(QUIC_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(QUIC_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(QUIC_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(QUIC_BUILD_PERF OFF CACHE BOOL "" FORCE)
