@@ -207,8 +207,8 @@ TransportCallbacks SessionManager::make_transport_callbacks() {
                              uint64_t /*object_id*/, uint8_t /*priority*/,
                              const uint8_t* payload,
                              int32_t payload_len) {
-        auto it = alias_map_.find(track_alias);
-        if (it == alias_map_.end()) {
+        auto it = inbound_alias_map_.find(track_alias);
+        if (it == inbound_alias_map_.end()) {
             log(LogLevel::Warn, "Datagram for unknown alias %llu",
                 static_cast<unsigned long long>(track_alias));
             return;
@@ -324,7 +324,8 @@ void SessionManager::handle_transport_state_change(TransportState ts,
 
 void SessionManager::reset_moq_state() {
     request_id_map_.clear();
-    alias_map_.clear();
+    inbound_alias_map_.clear();
+    outbound_alias_map_.clear();
     next_request_id_ = 0;
     next_track_alias_ = 1;
     orchestration_started_ = false;
@@ -632,7 +633,7 @@ void SessionManager::handle_control_message(uint64_t message_type,
         if (it != request_id_map_.end()) {
             TrackHandle* handle = it->second;
             handle->moq_track_alias = result.track_alias;
-            alias_map_[result.track_alias] = handle;
+            inbound_alias_map_[result.track_alias] = handle;
             log(LogLevel::Info,
                 "SUBSCRIBE_OK: track '%s' req_id=%llu alias=%llu",
                 handle->config.name.c_str(),
@@ -686,7 +687,7 @@ void SessionManager::handle_control_message(uint64_t message_type,
         if (matched) {
             uint64_t alias = next_track_alias_++;
             matched->moq_track_alias = alias;
-            alias_map_[alias] = matched;
+            outbound_alias_map_[alias] = matched;
 
             // Send SUBSCRIBE_OK
             moq::SubscribeOkConfig ok;

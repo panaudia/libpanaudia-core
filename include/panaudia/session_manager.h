@@ -105,8 +105,9 @@ private:
     // MOQ orchestration state
     uint64_t next_request_id_ = 0;      // even sequence: 0, 2, 4, ...
     uint64_t next_track_alias_ = 1;     // for incoming SUBSCRIBEs (we assign)
-    std::unordered_map<uint64_t, TrackHandle*> request_id_map_;   // our SUBSCRIBE req_id → handle
-    std::unordered_map<uint64_t, TrackHandle*> alias_map_;        // track_alias → handle
+    std::unordered_map<uint64_t, TrackHandle*> request_id_map_;       // our SUBSCRIBE req_id → handle
+    std::unordered_map<uint64_t, TrackHandle*> inbound_alias_map_;  // server-assigned alias → inbound handle
+    std::unordered_map<uint64_t, TrackHandle*> outbound_alias_map_; // our-assigned alias → outbound handle
     bool orchestration_started_ = false;
     bool first_subscribe_sent_ = false;  // tracks whether JWT has been attached
 
