@@ -2,8 +2,10 @@
 #include <catch2/benchmark/catch_benchmark.hpp>
 #include "panaudia/opus_codec.h"
 
-#define _USE_MATH_DEFINES
 #include <cmath>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <vector>
 
 using namespace panaudia;
