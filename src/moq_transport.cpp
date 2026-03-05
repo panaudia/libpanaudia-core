@@ -1,11 +1,20 @@
 #include <panaudia/moq_transport.h>
 #include <panaudia/moq_protocol.h>
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4200)  // nonstandard extension: zero-sized array
+#else
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnested-anon-types"
 #pragma GCC diagnostic ignored "-Wextra-semi"
+#endif
 #include <msquic.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
 #pragma GCC diagnostic pop
+#endif
 
 #include <atomic>
 #include <cstdio>

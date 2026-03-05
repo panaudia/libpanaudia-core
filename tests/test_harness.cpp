@@ -22,7 +22,7 @@
 #include <thread>
 #include <vector>
 
-#ifdef __APPLE__
+#ifndef _WIN32
 #include <pthread.h>
 #endif
 
@@ -443,6 +443,7 @@ static void rt_thread_func(PanaudiaCore& core,
                              const HarnessConfig& cfg,
                              RTStats& stats) {
     // Try to elevate thread priority (requires root on macOS/Linux)
+#ifndef _WIN32
 #ifdef __APPLE__
     pthread_setname_np("panaudia-rt-sim");
 #endif
@@ -453,6 +454,7 @@ static void rt_thread_func(PanaudiaCore& core,
             std::printf("[RT] Warning: could not set real-time priority (run as root for accurate timing)\n");
         }
     }
+#endif
 
     const uint32_t frame_size = cfg.sample_rate * cfg.frame_ms / 1000;
     stats.expected_interval_us = cfg.frame_ms * 1000.0;
