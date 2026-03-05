@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Warnings — applied per-target below (not globally, to avoid polluting msquic/opus builds)
+if(MSVC)
+    set(PANAUDIA_WARNINGS /W4)
+else()
+    set(PANAUDIA_WARNINGS ${PANAUDIA_WARNINGS})
+endif()
 
 # --- Dependencies (via FetchContent) ---
 
@@ -63,7 +68,7 @@ target_include_directories(panaudia-core
         $<INSTALL_INTERFACE:include>
 )
 
-target_compile_options(panaudia-core PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+target_compile_options(panaudia-core PRIVATE ${PANAUDIA_WARNINGS})
 
 # msquic only exposes headers via INSTALL_INTERFACE, so add BUILD_INTERFACE manually
 target_include_directories(panaudia-core
@@ -88,7 +93,7 @@ add_executable(panaudia-core-tests
     tests/test_session.cpp
 )
 
-target_compile_options(panaudia-core-tests PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+target_compile_options(panaudia-core-tests PRIVATE ${PANAUDIA_WARNINGS})
 
 target_link_libraries(panaudia-core-tests
     PRIVATE
@@ -107,7 +112,7 @@ add_executable(panaudia-bench
     tests/bench_codec.cpp
 )
 
-target_compile_options(panaudia-bench PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+target_compile_options(panaudia-bench PRIVATE ${PANAUDIA_WARNINGS})
 
 target_link_libraries(panaudia-bench
     PRIVATE
@@ -121,7 +126,7 @@ add_executable(panaudia-test-harness
     tests/test_harness.cpp
 )
 
-target_compile_options(panaudia-test-harness PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+target_compile_options(panaudia-test-harness PRIVATE ${PANAUDIA_WARNINGS})
 
 target_link_libraries(panaudia-test-harness
     PRIVATE

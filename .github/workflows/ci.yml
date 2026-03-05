@@ -10,7 +10,7 @@ jobs:
   build-and-test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -25,16 +25,31 @@ jobs:
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DFETCHCONTENT_BASE_DIR=${{ github.workspace }}/fc-cache
 
-      - name: Build
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
         run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      - name: Test
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release --parallel
+
+      - name: Test (Unix)
+        if: runner.os != 'Windows'
         # Exclude [4d] reconnection tests: QUIC/UDP to closed ports on CI runners
         # doesn't get immediate connection refused — msquic waits for idle timeout
         run: ./build/panaudia-core-tests '~[integration]~[4d]'
 
-      - name: Benchmark
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: ./build/Release/panaudia-core-tests.exe "~[integration]~[4d]"
+
+      - name: Benchmark (Unix)
+        if: runner.os != 'Windows'
         run: ./build/panaudia-bench
+
+      - name: Benchmark (Windows)
+        if: runner.os == 'Windows'
+        run: ./build/Release/panaudia-bench.exe
 
   tsan:
     runs-on: ubuntu-latest
