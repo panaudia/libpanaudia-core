@@ -82,6 +82,11 @@ target_link_libraries(panaudia-core
         msquic
 )
 
+# msquic static build on Windows: transitive system libraries aren't propagated
+if(WIN32)
+    target_link_libraries(panaudia-core PRIVATE ws2_32 schannel ntdll bcrypt ncrypt crypt32 iphlpapi advapi32)
+endif()
+
 # --- Tests ---
 
 add_executable(panaudia-core-tests
