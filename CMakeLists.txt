@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Warnings — applied per-target below (not globally, to avoid polluting msquic/opus builds)
 if(MSVC)
-    set(PANAUDIA_WARNINGS /W4)
+    set(PANAUDIA_WARNINGS /W4 /wd4324)
 else()
     set(PANAUDIA_WARNINGS ${PANAUDIA_WARNINGS})
 endif()

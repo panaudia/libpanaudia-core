@@ -19,8 +19,9 @@ The server actually uses a fork (`github.com/paulharter/moqtransport`, branch `f
 ## Draft Status
 
 The MOQ specification is a moving target as its still in draft (currently 17 I think). 
+Protocol compatability is the greatest constraint in using this library.
 We aim to track the moqtransport library as closely as possible at the moment. It is a little behind the latest drafts, 
-but offers a good stable implementation of MOQ.
+but offers a good stable server-side implementation. Hopefully things will stabilize soon.
 
 This commit sits between MOQ draft versions. It has partial draft-13 wire format updates (TrackAlias moved from SUBSCRIBE to SUBSCRIBE_OK) but uses a draft-11 era version number. It is not fully compliant with any single published draft.
 

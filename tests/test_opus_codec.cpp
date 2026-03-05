@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "panaudia/opus_codec.h"
 
+#define _USE_MATH_DEFINES
 #include <cmath>
 #include <vector>
 #include <numeric>
