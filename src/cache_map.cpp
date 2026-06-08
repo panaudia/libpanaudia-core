@@ -1,5 +1,6 @@
 #include "panaudia/cache_map.h"
 
+#include <mutex>    // std::unique_lock (libstdc++ doesn't get it via <shared_mutex>)
 #include <utility>
 
 namespace panaudia {
