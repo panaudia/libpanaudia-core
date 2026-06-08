@@ -1,4 +1,5 @@
 #include <panaudia/moq_protocol.h>
+#include <algorithm>
 #include <cstring>
 
 namespace panaudia {
@@ -169,11 +170,21 @@ bool decode_namespace(const uint8_t* buffer, int32_t buffer_len,
 // KVP Parameters
 // ---------------------------------------------------------------------------
 
+// draft-16: parameters are delta-encoded. The list is sorted ascending by
+// key, then each pair writes (key - previousKey) as its type; odd keys carry
+// length-prefixed bytes, even keys a bare varint. Matches Eyevinn's
+// KVPList.AppendNumVersioned (and the TS encodeParams).
 std::vector<uint8_t> encode_params(const std::vector<KvpParam>& params) {
+    std::vector<KvpParam> sorted = params;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const KvpParam& a, const KvpParam& b) { return a.key < b.key; });
+
     std::vector<uint8_t> result;
-    append_varint(result, static_cast<uint64_t>(params.size()));
-    for (const auto& p : params) {
-        append_varint(result, p.key);
+    append_varint(result, static_cast<uint64_t>(sorted.size()));
+    uint64_t prev = 0;
+    for (const auto& p : sorted) {
+        append_varint(result, p.key - prev);  // delta type
+        prev = p.key;
         if (p.key & 1) {
             // Odd key → length-prefixed bytes
             append_varint(result, static_cast<uint64_t>(p.bytes_value.size()));
@@ -193,9 +204,13 @@ bool decode_params(const uint8_t* buffer, int32_t buffer_len,
 
     params.clear();
     params.reserve(static_cast<size_t>(count));
+    uint64_t prev = 0;
     for (uint64_t i = 0; i < count; ++i) {
         KvpParam p;
-        if (!read_varint(buffer, buffer_len, offset, p.key)) return false;
+        uint64_t delta = 0;
+        if (!read_varint(buffer, buffer_len, offset, delta)) return false;
+        p.key = prev + delta;  // accumulate absolute type
+        prev = p.key;
 
         if (p.key & 1) {
             // Odd key → length-prefixed bytes
@@ -345,30 +360,22 @@ bool parse_object_datagram(const uint8_t* data, int32_t len, ObjectDatagram& out
 // ---------------------------------------------------------------------------
 
 std::vector<uint8_t> build_client_setup(const ClientSetupConfig& config) {
-    std::vector<uint8_t> content;
+    // draft-16: no supported-versions list (ALPN negotiates), no ROLE param.
+    // Setup params are delta-encoded. PATH (odd 0x01) is required for native
+    // QUIC; MAX_REQUEST_ID (even 0x02) caps requests the server may send us.
+    std::vector<KvpParam> params;
 
-    // 1 supported version
-    append_varint(content, 1);
-    append_varint(content, config.version);
+    KvpParam path;
+    path.key = kParamKeyPath;
+    path.bytes_value.assign(config.path.begin(), config.path.end());
+    params.push_back(std::move(path));
 
-    // 3 parameters: Role, Path, MaxSubscribeId
-    append_varint(content, 3);
+    KvpParam max_req;
+    max_req.key = kParamKeyMaxSubscribeId;
+    max_req.int_value = config.max_subscribe_id;
+    params.push_back(std::move(max_req));
 
-    // Role = PubSub (0x03). Key 0x00 is even → value is bare varint
-    append_varint(content, kParamKeyRole);
-    append_varint(content, kRolePubSub);
-
-    // Path. Key 0x01 is odd → length-prefixed bytes
-    append_varint(content, kParamKeyPath);
-    append_varint(content, static_cast<uint64_t>(config.path.size()));
-    content.insert(content.end(),
-                   reinterpret_cast<const uint8_t*>(config.path.data()),
-                   reinterpret_cast<const uint8_t*>(config.path.data()) + config.path.size());
-
-    // MaxSubscribeId. Key 0x02 is even → value is bare varint
-    append_varint(content, kParamKeyMaxSubscribeId);
-    append_varint(content, config.max_subscribe_id);
-
+    std::vector<uint8_t> content = encode_params(params);
     return build_control_message(MessageType::ClientSetup, content);
 }
 
@@ -378,8 +385,10 @@ std::vector<uint8_t> build_client_setup(const ClientSetupConfig& config) {
 
 bool parse_server_setup(const uint8_t* content, int32_t content_len,
                         ServerSetupResult& result) {
+    // draft-16: no version field — the version is fixed by the ALPN. Body is
+    // just the delta-encoded setup parameters.
     int32_t offset = 0;
-    if (!read_varint(content, content_len, offset, result.version)) return false;
+    result.version = kMoqVersion;
     if (!decode_params(content, content_len, offset, result.params)) return false;
     return true;
 }
@@ -392,28 +401,56 @@ std::vector<uint8_t> build_subscribe(const SubscribeConfig& config) {
     std::vector<uint8_t> content;
 
     append_varint(content, config.request_id);
-    // NOTE: NO TrackAlias in SUBSCRIBE per draft-11 / moqtransport
+    // NO TrackAlias in SUBSCRIBE — the publisher assigns it in SUBSCRIBE_OK.
     auto ns = encode_namespace(config.track_namespace);
     content.insert(content.end(), ns.begin(), ns.end());
     append_string_bytes(content, config.track_name);
 
-    // SubscriberPriority (1 byte)
-    content.push_back(config.priority);
-    // GroupOrder (1 byte)
-    content.push_back(config.group_order);
-    // Forward (1 byte)
-    content.push_back(config.forward);
-    // FilterType (varint)
-    append_varint(content, config.filter_type);
+    // draft-16: SubscriberPriority/GroupOrder/Forward and the Subscription
+    // Filter are now PARAMETERS, merged with auth + any host extra_params,
+    // then sorted ascending and delta-encoded by encode_params().
+    std::vector<KvpParam> params;
 
-    // Parameters
-    if (!config.authorization.empty()) {
-        append_varint(content, 1);  // 1 parameter
-        append_varint(content, kParamKeyAuthToken);
-        append_string_bytes(content, config.authorization);
-    } else {
-        append_varint(content, 0);  // 0 parameters
+    KvpParam prio;
+    prio.key = kParamKeySubscriberPriority;
+    prio.int_value = config.priority;
+    params.push_back(std::move(prio));
+
+    KvpParam order;
+    order.key = kParamKeyGroupOrder;
+    order.int_value = config.group_order;
+    params.push_back(std::move(order));
+
+    KvpParam fwd;
+    fwd.key = kParamKeyForward;
+    fwd.int_value = config.forward;
+    params.push_back(std::move(fwd));
+
+    // Subscription Filter (odd 0x21 → bytes): [filterType][start if Abs*]
+    // [endGroup if AbsRange]. We only use LatestGroup/LatestObject — no location.
+    KvpParam filter;
+    filter.key = kParamKeySubscriptionFilter;
+    {
+        uint8_t buf[8];
+        int32_t n = encode_varint(config.filter_type, buf);
+        filter.bytes_value.assign(buf, buf + n);
     }
+    params.push_back(std::move(filter));
+
+    if (!config.authorization.empty()) {
+        // Raw JWT bytes (Eyevinn does not wrap in the spec Token struct).
+        KvpParam auth;
+        auth.key = kParamKeyAuthToken;
+        auth.bytes_value.assign(config.authorization.begin(),
+                                config.authorization.end());
+        params.push_back(std::move(auth));
+    }
+    for (const auto& p : config.extra_params) {
+        params.push_back(p);
+    }
+
+    auto encoded_params = encode_params(params);
+    content.insert(content.end(), encoded_params.begin(), encoded_params.end());
 
     return build_control_message(MessageType::Subscribe, content);
 }
@@ -426,11 +463,37 @@ bool parse_subscribe(const uint8_t* content, int32_t content_len,
     // NO TrackAlias
     if (!decode_namespace(content, content_len, offset, result.track_namespace)) return false;
     if (!read_string(content, content_len, offset, result.track_name)) return false;
-    if (!read_byte(content, content_len, offset, result.priority)) return false;
-    if (!read_byte(content, content_len, offset, result.group_order)) return false;
-    if (!read_byte(content, content_len, offset, result.forward)) return false;
-    if (!read_varint(content, content_len, offset, result.filter_type)) return false;
     if (!decode_params(content, content_len, offset, result.params)) return false;
+
+    // draft-16: extract the moved fields from the parameter list. Defaults
+    // match Eyevinn's when a parameter is absent.
+    result.priority = 128;
+    result.group_order = 1;  // ascending
+    result.forward = 1;
+    result.filter_type = kFilterLatestObject;
+    for (const auto& p : result.params) {
+        switch (p.key) {
+        case kParamKeySubscriberPriority:
+            result.priority = static_cast<uint8_t>(p.int_value);
+            break;
+        case kParamKeyGroupOrder:
+            result.group_order = static_cast<uint8_t>(p.int_value);
+            break;
+        case kParamKeyForward:
+            result.forward = static_cast<uint8_t>(p.int_value);
+            break;
+        case kParamKeySubscriptionFilter:
+            if (!p.bytes_value.empty()) {
+                int32_t fo = 0;
+                uint64_t ft = decode_varint(p.bytes_value.data(),
+                                            static_cast<int32_t>(p.bytes_value.size()), fo);
+                if (fo > 0) result.filter_type = ft;
+            }
+            break;
+        default:
+            break;
+        }
+    }
     return true;
 }
 
@@ -443,17 +506,32 @@ std::vector<uint8_t> build_subscribe_ok(const SubscribeOkConfig& config) {
 
     append_varint(content, config.request_id);
     append_varint(content, config.track_alias);
-    append_varint(content, config.expires_ms);
-    content.push_back(config.group_order);
-    content.push_back(config.content_exists ? 1 : 0);
 
+    // draft-16: Expires / Largest Object (→ ContentExists) / GroupOrder are
+    // parameters. (A trailing Track Extensions block may follow; we emit none.)
+    std::vector<KvpParam> params;
+    if (config.expires_ms > 0) {
+        KvpParam e;
+        e.key = kParamKeyExpires;
+        e.int_value = config.expires_ms;
+        params.push_back(std::move(e));
+    }
     if (config.content_exists) {
-        append_varint(content, config.largest_group_id);
-        append_varint(content, config.largest_object_id);
+        KvpParam largest;
+        largest.key = kParamKeyLargestObject;
+        append_varint(largest.bytes_value, config.largest_group_id);
+        append_varint(largest.bytes_value, config.largest_object_id);
+        params.push_back(std::move(largest));
+    }
+    if (config.group_order != 0) {
+        KvpParam o;
+        o.key = kParamKeyGroupOrder;
+        o.int_value = config.group_order;
+        params.push_back(std::move(o));
     }
 
-    // 0 parameters
-    append_varint(content, 0);
+    auto encoded_params = encode_params(params);
+    content.insert(content.end(), encoded_params.begin(), encoded_params.end());
 
     return build_control_message(MessageType::SubscribeOk, content);
 }
@@ -464,19 +542,37 @@ bool parse_subscribe_ok(const uint8_t* content, int32_t content_len,
 
     if (!read_varint(content, content_len, offset, result.request_id)) return false;
     if (!read_varint(content, content_len, offset, result.track_alias)) return false;
-    if (!read_varint(content, content_len, offset, result.expires_ms)) return false;
-    if (!read_byte(content, content_len, offset, result.group_order)) return false;
-
-    uint8_t ce = 0;
-    if (!read_byte(content, content_len, offset, ce)) return false;
-    result.content_exists = (ce != 0);
-
-    if (result.content_exists) {
-        if (!read_varint(content, content_len, offset, result.largest_group_id)) return false;
-        if (!read_varint(content, content_len, offset, result.largest_object_id)) return false;
-    }
-
     if (!decode_params(content, content_len, offset, result.params)) return false;
+
+    // draft-16: Expires / GroupOrder / Largest Object come from parameters.
+    result.expires_ms = 0;
+    result.group_order = 0;
+    result.content_exists = false;
+    for (const auto& p : result.params) {
+        switch (p.key) {
+        case kParamKeyExpires:
+            result.expires_ms = p.int_value;
+            break;
+        case kParamKeyGroupOrder:
+            result.group_order = static_cast<uint8_t>(p.int_value);
+            break;
+        case kParamKeyLargestObject: {
+            result.content_exists = true;
+            int32_t lo = 0;
+            result.largest_group_id = decode_varint(
+                p.bytes_value.data(), static_cast<int32_t>(p.bytes_value.size()), lo);
+            if (lo > 0) {
+                int32_t lo2 = 0;
+                result.largest_object_id = decode_varint(
+                    p.bytes_value.data() + lo,
+                    static_cast<int32_t>(p.bytes_value.size()) - lo, lo2);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
     return true;
 }
 
@@ -486,12 +582,16 @@ bool parse_subscribe_ok(const uint8_t* content, int32_t content_len,
 
 bool parse_subscribe_error(const uint8_t* content, int32_t content_len,
                            SubscribeErrorResult& result) {
+    // draft-16: [RequestID][ErrorCode][RetryInterval][ReasonPhrase]. No
+    // trailing TrackAlias (that was draft-11).
     int32_t offset = 0;
 
     if (!read_varint(content, content_len, offset, result.request_id)) return false;
     if (!read_varint(content, content_len, offset, result.error_code)) return false;
+    uint64_t retry_interval = 0;  // minimum ms before retry (0 = don't retry)
+    if (!read_varint(content, content_len, offset, retry_interval)) return false;
     if (!read_string(content, content_len, offset, result.reason)) return false;
-    if (!read_varint(content, content_len, offset, result.track_alias)) return false;
+    result.track_alias = 0;
     return true;
 }
 

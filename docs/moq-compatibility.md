@@ -2,28 +2,40 @@
 
 libpanaudia-core implements the MOQ (Media over QUIC) protocol for real-time media transport. This document describes the specific protocol version we target and how it relates to the server-side Go library.
 
-## Target: moqtransport Go Library
+## Target: Eyevinn/moqtransport Go Library (draft-16)
 
-The Panaudia server uses the [moqtransport](https://github.com/mengelbart/moqtransport) Go library by Mathis Engelbart. libpanaudia-core's MOQ wire format is pinned to be byte-compatible with a specific commit of this library.
+The Panaudia server uses the [Eyevinn/moqtransport](https://github.com/Eyevinn/moqtransport)
+Go library — a fork of mengelbart/moqtransport carried forward to draft-16.
+libpanaudia-core's MOQ wire format is byte-compatible with what that library
+emits on the wire (verified by golden-vector tests; see below).
 
 | Property | Value |
 |---|---|
-| Go module | `github.com/mengelbart/moqtransport` |
-| Pinned commit | `3b0932de5aeb` |
-| Pseudo-version | `v0.5.1-0.20251006143843-3b0932de5aeb` |
-| MOQ version number | `0xff00000b` (0xff000000 + 11) |
-| ALPN | `moq-00` |
+| Go module | `github.com/Eyevinn/moqtransport` |
+| MOQ version number | `0xff000010` (0xff000000 + 0x10 = draft-16) |
+| ALPN | `moqt-16` |
 
-The server actually uses a fork (`github.com/paulharter/moqtransport`, branch `fix/subscribe-ok-track-alias`) which fixes a bug where `SUBSCRIBE_OK` always sent TrackAlias=0. Upstream PR: [#266](https://github.com/mengelbart/moqtransport/pull/266). Once merged, the fork can be dropped.
+> **History:** earlier versions targeted `mengelbart/moqtransport` (draft-11,
+> `0xff00000b`, ALPN `moq-00`) plus a `paulharter` fork for a SUBSCRIBE_OK
+> TrackAlias fix. The stack migrated to Eyevinn/draft-16 in 2026; the fork and
+> the in-band version negotiation are gone.
 
 ## Draft Status
 
-The MOQ specification is a moving target as its still in draft (currently 17 I think). 
-Protocol compatability is the greatest constraint in using this library.
-We aim to track the moqtransport library as closely as possible at the moment. It is a little behind the latest drafts, 
-but offers a good stable server-side implementation. Hopefully things will stabilize soon.
+The MOQ specification is still in draft. "draft-16" is not a single wire format
+in practice — the IETF spec text, the `moqtail` toolkit, and Eyevinn each
+implement *different partial* draft-16s. **The authority for this library is what
+the Eyevinn server actually puts on the wire**, not the abstract spec. Eyevinn
+implements the draft-16 delta-encoded parameters, ALPN-based version negotiation,
+and the SUBSCRIBE/SUBSCRIBE_OK parameter restructuring, while keeping the
+draft-14-style message-type set (`ANNOUNCE`/`SUBSCRIBE_ANNOUNCES`, per-message
+OK/Error) and the older fixed-type OBJECT_DATAGRAM.
 
-This commit sits between MOQ draft versions. It has partial draft-13 wire format updates (TrackAlias moved from SUBSCRIBE to SUBSCRIBE_OK) but uses a draft-11 era version number. It is not fully compliant with any single published draft.
+**Golden vectors.** `tests/test_moq_protocol.cpp` `[moq_golden]` asserts the
+encoder produces bytes identical to the shared fixtures in
+`spatial-mixer/plan/moq-draft14/golden/draft16-vectors.json` — the same fixtures
+the Go server and TypeScript client are validated against, so all three speak the
+same wire.
 
 ## Wire Format Summary
 
@@ -37,30 +49,31 @@ All control messages on the bidirectional control stream use:
 
 ### SUBSCRIBE (No TrackAlias)
 
-Unlike some MOQ drafts, SUBSCRIBE does **not** carry a TrackAlias. The publisher assigns one and returns it in SUBSCRIBE_OK.
+SUBSCRIBE does **not** carry a TrackAlias — the publisher assigns one and returns
+it in SUBSCRIBE_OK. In draft-16 the priority / group order / forward / filter
+fields are no longer inline; they are **parameters** (see KVP below), merged with
+the auth token and any host-supplied params, then sorted ascending and
+delta-encoded.
 
 ```
 [RequestID varint]
 [Namespace Tuple]
 [TrackName: Len varint + UTF-8 bytes]
-[SubscriberPriority 1 byte]
-[GroupOrder 1 byte]
-[Forward 1 byte]
-[FilterType varint]
-[Params KVP]
+[Params KVP]   # SubscriberPriority(0x20), GroupOrder(0x22), Forward(0x10),
+               # SubscriptionFilter(0x21), AuthorizationToken(0x03), ...
 ```
 
 ### SUBSCRIBE_OK (Has TrackAlias)
 
+In draft-16 Expires / GroupOrder / Largest Object are also parameters; a trailing
+Track Extensions block may follow (the server emits none today).
+
 ```
 [RequestID varint]
 [TrackAlias varint]
-[Expires varint (ms, 0=never)]
-[GroupOrder 1 byte]
-[ContentExists 1 byte]
-[LargestGroupID varint]      # only if ContentExists=1
-[LargestObjectID varint]     # only if ContentExists=1
-[Params KVP]
+[Params KVP]   # Expires(0x08), LargestObject(0x09 → "content exists"),
+               # GroupOrder(0x22)
+[Track Extensions]   # currently empty
 ```
 
 ### TrackAlias Flow
@@ -82,19 +95,34 @@ Sent as QUIC datagrams (unreliable, unordered):
 
 Datagram type values: `0x00` = plain, `0x01` = with extensions, `0x02` = status, `0x03` = status with extensions.
 
-### KVP Parameters
+> Eyevinn retains this fixed-type datagram format from draft-13/14 (it did **not**
+> adopt the draft-16 bit-field datagram type). So the datagram path is
+> **wire-identical to the previous draft-11 codec** — no change was needed here.
 
-Key-value pairs use a parity rule for value encoding:
+### KVP Parameters (delta-encoded)
 
-- **Even keys** (0x00, 0x02, 0x04): bare varint value
-- **Odd keys** (0x01, 0x03): length-prefixed bytes
+In draft-16 a parameter list is `[count]` followed by pairs whose **type is
+delta-encoded**: write the list sorted ascending by key, and each pair stores
+`key − previousKey` (starting from 0) as its type. The value encoding still
+follows the parity of the absolute key:
 
-| Key | Name | Used in |
-|-----|------|---------|
-| 0x00 | Role | CLIENT_SETUP |
-| 0x01 | Path | CLIENT_SETUP |
-| 0x02 | MaxSubscribeId | CLIENT_SETUP |
-| 0x03 | AuthorizationToken | SUBSCRIBE |
+- **Even keys**: bare varint value
+- **Odd keys**: length-prefixed bytes
+
+| Key | Name | Parity | Used in |
+|-----|------|--------|---------|
+| 0x01 | Path | odd | CLIENT_SETUP (raw QUIC only) |
+| 0x02 | MaxRequestId | even | CLIENT_SETUP |
+| 0x03 | AuthorizationToken | odd | SUBSCRIBE (raw JWT bytes) |
+| 0x08 | Expires | even | SUBSCRIBE_OK |
+| 0x09 | LargestObject | odd | SUBSCRIBE_OK (Location: group, object) |
+| 0x10 | Forward | even | SUBSCRIBE |
+| 0x20 | SubscriberPriority | even | SUBSCRIBE |
+| 0x21 | SubscriptionFilter | odd | SUBSCRIBE ([filterType][start?][endGroup?]) |
+| 0x22 | GroupOrder | even | SUBSCRIBE / SUBSCRIBE_OK |
+| 0xFF01 | ResumeOpId (Panaudia) | odd | SUBSCRIBE — opaque to the core; supplied by the host via `subscribe_params_callback` (defined in `panaudia-statecache`) |
+
+The draft-11 `Role` (0x00) parameter was removed in draft-16.
 
 ### ANNOUNCE / ANNOUNCE_OK
 
@@ -114,18 +142,20 @@ In Panaudia's own server auth the JWT itself is Ed25519-signed. libpanaudia-core
 
 ## CLIENT_SETUP
 
-libpanaudia-core sends:
+In draft-16 the version is negotiated by the ALPN (`moqt-16`), so CLIENT_SETUP
+carries **no** version list and **no** Role parameter — just a delta-encoded
+parameter list. libpanaudia-core sends:
 
 ```
-Version count: 1
-Version: 0xff00000b
-Parameters:
-  Role = PubSub (0x03)
-  Path = "/"
-  MaxSubscribeId = 100
+Parameters (delta-encoded):
+  Path = "/"            # key 0x01
+  MaxRequestId = 100    # key 0x02
 ```
 
-The Path parameter is required for raw QUIC connections (moqtransport validates it). For WebTransport connections, the path comes from the HTTP URL instead.
+The Path parameter is required for raw QUIC connections (the server validates it).
+For WebTransport connections the path comes from the HTTP URL instead.
+
+SERVER_SETUP likewise has no version field in draft-16 — just a parameter list.
 
 ## Session Orchestration Sequence
 
@@ -142,6 +172,6 @@ The Path parameter is required for raw QUIC connections (moqtransport validates 
 
 ## Further Reference
 
-- [Wire format byte-level reference](../plan/moq_protocol_wire_format.md) -- includes byte-level encoding examples
-- [moqtransport Go library](https://github.com/mengelbart/moqtransport)
-- [Panaudia fork with TrackAlias fix](https://github.com/paulharter/moqtransport/tree/fix/subscribe-ok-track-alias)
+- [Wire format byte-level reference](../plan/moq_protocol_wire_format.md) -- byte-level encoding examples (note: predates draft-16; see the draft-11→16 delta below)
+- [draft-11 → draft-16 wire delta](../../spatial-mixer/plan/moq-draft14/wire-delta-16.md) -- the authoritative per-message delta, grounded in Eyevinn's source
+- [Eyevinn/moqtransport Go library](https://github.com/Eyevinn/moqtransport)

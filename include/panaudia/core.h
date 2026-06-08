@@ -62,6 +62,23 @@ using LogCallback = void (*)(LogLevel level,
                              const char* message,
                              void* ctx);
 
+// An opaque key-value parameter the host asks the core to attach to an
+// outgoing SUBSCRIBE. The core forwards it verbatim to the wire; it does
+// not interpret the key or value. Odd keys carry length-prefixed bytes
+// (the only form hosts use today, e.g. a cache-resume parameter).
+struct SubscribeParam {
+    uint64_t key;
+    std::vector<uint8_t> value;
+};
+
+// Invoked by the core just before each (re)SUBSCRIBE for an inbound track.
+// The host appends opaque SubscribeParams (e.g. its cache-resume parameter,
+// recomputed from current state). Called from the core's session thread.
+// Application semantics (what the params mean) live entirely in the host.
+using SubscribeParamsCallback = void (*)(TrackHandle* track,
+                                         std::vector<SubscribeParam>& out,
+                                         void* ctx);
+
 // --- Configuration ---
 
 struct TrackConfig {
@@ -107,6 +124,11 @@ struct SessionConfig {
     LogCallback log_callback = nullptr;
     void* log_ctx = nullptr;
     LogLevel log_level = LogLevel::Info;
+
+    // Optional: lets the host attach opaque params to each (re)SUBSCRIBE
+    // (e.g. a cache-resume parameter). The core does not interpret them.
+    SubscribeParamsCallback subscribe_params_callback = nullptr;
+    void*                   subscribe_params_ctx      = nullptr;
 
     // Reconnection
     uint32_t max_reconnect_attempts = 10;      // 0 = disabled

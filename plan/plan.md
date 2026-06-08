@@ -14,7 +14,14 @@ The core is deliberately minimal — it has no knowledge of application semantic
 
 **Stop and talk when things get complicated.** If the implementation is becoming more complex than expected, or heading in an unforeseen direction, stop coding and discuss. Do not push through complexity hoping it will resolve — surface it early.
 
-**No surprise dependencies.** The approved dependency list is: msquic, libopus, and a test framework (Catch2 or Google Test). Do not add any other dependency without asking first. This includes header-only libraries, build tools, or "small" utility libraries.
+**No surprise dependencies.** The approved dependency list for the **`panaudia-core`** transport target is: msquic, libopus, and a test framework (Catch2 or Google Test). Do not add any other dependency without asking first. This includes header-only libraries, build tools, or "small" utility libraries.
+
+> **Update (2026):** the repo also builds a second, separate target,
+> **`panaudia-statecache`** (attribute-cache decode/merge), which depends on
+> nlohmann/json. That dependency is scoped to the statecache target only — the
+> `panaudia-core` contract above (msquic + libopus, no JSON, no application
+> semantics) is unchanged. See `plan/extract-statecache.md` and the README's
+> "Two libraries in this repo".
 
 **One phase file in context at a time.** When working on a phase, load that phase's markdown file. Tick off checkboxes as tasks complete. If a task turns out to need rethinking, update the checkbox description rather than silently diverging.
 

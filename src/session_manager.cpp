@@ -5,6 +5,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace panaudia {
 
@@ -169,7 +170,9 @@ void SessionManager::configure(const SessionConfig& config) {
                 handle->decode_buffer.resize(960 * tc.channels);
             }
         }
-        // Data tracks: no buffers or codecs needed
+        // Data tracks: no buffers or codecs needed. Inbound data-track
+        // payloads are delivered to the host as opaque bytes via
+        // data_recv_callback; any cache/merge semantics live in the host.
 
         name_map_[tc.name] = handle.get();
         tracks_.push_back(std::move(handle));
@@ -568,11 +571,30 @@ void SessionManager::start_orchestration() {
             sub.track_namespace = t->config.moq_namespace;
             sub.track_name = t->config.moq_track_name;
             sub.filter_type = moq::kFilterLatestGroup;
+            // We want objects delivered (forward=1) in ascending group order;
+            // the struct default forward=0 would tell the publisher not to send.
+            sub.forward = 1;
+            sub.group_order = 1;  // ascending
 
             // Attach JWT on first SUBSCRIBE only
             if (!first_subscribe_sent_ && !config_.jwt.empty()) {
                 sub.authorization = config_.jwt;
                 first_subscribe_sent_ = true;
+            }
+
+            // Let the host attach opaque subscribe params (e.g. a cache-
+            // resume parameter recomputed from its current state). The core
+            // does not interpret them — it just forwards them to the wire.
+            if (config_.subscribe_params_callback) {
+                std::vector<SubscribeParam> host_params;
+                config_.subscribe_params_callback(
+                    t.get(), host_params, config_.subscribe_params_ctx);
+                for (auto& sp : host_params) {
+                    moq::KvpParam kp;
+                    kp.key = sp.key;
+                    kp.bytes_value = std::move(sp.value);
+                    sub.extra_params.push_back(std::move(kp));
+                }
             }
 
             t->moq_request_id = next_request_id_;
@@ -936,7 +958,11 @@ void SessionManager::dispatch_audio_datagram(TrackHandle* track,
 void SessionManager::dispatch_data_datagram(TrackHandle* track,
                                               const uint8_t* payload,
                                               int32_t payload_len) {
-    if (config_.data_recv_callback && payload_len > 0) {
+    if (payload_len <= 0) return;
+
+    // Data-track payloads are opaque to the core — delivered raw to the
+    // host, which owns any decode/merge/cache semantics.
+    if (config_.data_recv_callback) {
         config_.data_recv_callback(
             track, payload, static_cast<uint32_t>(payload_len),
             config_.data_recv_ctx);

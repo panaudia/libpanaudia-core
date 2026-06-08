@@ -1,8 +1,88 @@
 #include <catch2/catch_test_macros.hpp>
 #include <panaudia/moq_protocol.h>
 #include <cstring>
+#include <vector>
 
 using namespace panaudia::moq;
+
+// ============================================================================
+// SUBSCRIBE extra_params — generic opaque KVP pass-through [moq_params]
+// ============================================================================
+// (The cache-resume param itself, key 0xFF01, is an application convention
+//  tested in panaudia-statecache; here we only verify the core forwards
+//  arbitrary host-supplied params on the wire.)
+
+// Build an odd-key (length-prefixed bytes) KVP, as a host would for an
+// opaque subscribe param.
+static KvpParam make_bytes_param(uint64_t key, std::vector<uint8_t> v) {
+    KvpParam p;
+    p.key = key;
+    p.bytes_value = std::move(v);
+    return p;
+}
+
+static const KvpParam* find_param(const SubscribeResult& r, uint64_t key) {
+    for (const auto& p : r.params) {
+        if (p.key == key) return &p;
+    }
+    return nullptr;
+}
+
+TEST_CASE("SUBSCRIBE encodes auth + custom param alongside the moved params", "[moq_params]") {
+    SubscribeConfig sub;
+    sub.request_id = 7;
+    sub.track_namespace = {"out", "attributes", "uuid"};
+    sub.track_name = "";
+    sub.priority = 128;
+    sub.group_order = 1;
+    sub.forward = 1;
+    sub.filter_type = kFilterLatestObject;
+    sub.authorization = "JWT";
+    sub.extra_params.push_back(make_bytes_param(0xFF01, {0, 0, 0, 0, 0, 0, 0, 42}));
+
+    auto wire = build_subscribe(sub);
+    SubscribeResult r;
+    // Skip [type varint][len 2 bytes]: type = 0x03 (1 byte varint), len = 2 bytes.
+    REQUIRE(wire.size() > 3);
+    REQUIRE(wire[0] == 0x03);  // SUBSCRIBE
+    const int32_t content_len = static_cast<int32_t>((wire[1] << 8) | wire[2]);
+    REQUIRE(parse_subscribe(wire.data() + 3, content_len, r));
+    REQUIRE(r.request_id == 7);
+
+    // draft-16: priority/order/forward/filter ride in the param list too, so we
+    // look up by key rather than by position. Auth + custom param round-trip.
+    const KvpParam* auth = find_param(r, kParamKeyAuthToken);
+    REQUIRE(auth != nullptr);
+    REQUIRE(std::string(auth->bytes_value.begin(), auth->bytes_value.end()) == "JWT");
+
+    const KvpParam* resume = find_param(r, 0xFF01);
+    REQUIRE(resume != nullptr);
+    REQUIRE(resume->bytes_value.size() == 8);
+    REQUIRE(resume->bytes_value[7] == 42);
+
+    // Moved fields decoded back out of the params.
+    REQUIRE(r.priority == 128);
+    REQUIRE(r.group_order == 1);
+    REQUIRE(r.forward == 1);
+    REQUIRE(r.filter_type == kFilterLatestObject);
+}
+
+TEST_CASE("SUBSCRIBE without auth still encodes the custom param", "[moq_params]") {
+    SubscribeConfig sub;
+    sub.request_id = 9;
+    sub.track_namespace = {"out", "attributes", "uuid"};
+    sub.extra_params.push_back(make_bytes_param(0xFF01, {0, 0, 0, 0, 0, 0, 0, 100}));
+
+    auto wire = build_subscribe(sub);
+    SubscribeResult r;
+    REQUIRE(wire.size() > 3);
+    const int32_t content_len = static_cast<int32_t>((wire[1] << 8) | wire[2]);
+    REQUIRE(parse_subscribe(wire.data() + 3, content_len, r));
+    REQUIRE(find_param(r, kParamKeyAuthToken) == nullptr);
+    const KvpParam* resume = find_param(r, 0xFF01);
+    REQUIRE(resume != nullptr);
+    REQUIRE(resume->bytes_value.size() == 8);
+}
 
 // ============================================================================
 // Varint [moq_varint]
@@ -495,7 +575,7 @@ TEST_CASE("CLIENT_SETUP default config", "[moq_setup]") {
     REQUIRE(consumed == static_cast<int32_t>(msg.size()));
 }
 
-TEST_CASE("CLIENT_SETUP contains version and 3 params", "[moq_setup]") {
+TEST_CASE("CLIENT_SETUP has no version list; params are path + max_request_id", "[moq_setup]") {
     auto msg = build_client_setup();
 
     MessageType type;
@@ -506,65 +586,44 @@ TEST_CASE("CLIENT_SETUP contains version and 3 params", "[moq_setup]") {
     REQUIRE(parse_control_message(msg.data(), static_cast<int32_t>(msg.size()),
                                   type, content, content_len, consumed));
 
-    // Parse content manually: [version_count=1][version][param_count=3][params...]
+    // draft-16: body is just a delta-encoded parameter list — no version list,
+    // no ROLE. PATH (odd 0x01) and MAX_REQUEST_ID (even 0x02), sorted ascending.
     int32_t offset = 0;
-    int32_t br = 0;
-
-    uint64_t ver_count = decode_varint(content + offset, content_len - offset, br);
-    REQUIRE(br > 0);
-    offset += br;
-    REQUIRE(ver_count == 1);
-
-    uint64_t version = decode_varint(content + offset, content_len - offset, br);
-    REQUIRE(br > 0);
-    offset += br;
-    REQUIRE(version == kMoqVersion);
-
-    uint64_t param_count = decode_varint(content + offset, content_len - offset, br);
-    REQUIRE(br > 0);
-    offset += br;
-    REQUIRE(param_count == 3);
+    std::vector<KvpParam> params;
+    REQUIRE(decode_params(content, content_len, offset, params));
+    REQUIRE(params.size() == 2);
+    REQUIRE(params[0].key == kParamKeyPath);
+    REQUIRE(params[1].key == kParamKeyMaxSubscribeId);
+    REQUIRE(params[1].int_value == 100);
 }
 
-TEST_CASE("SERVER_SETUP parse version and params", "[moq_setup]") {
-    // Build a fake SERVER_SETUP content: [version][param_count=0]
+TEST_CASE("SERVER_SETUP parses params with no version field", "[moq_setup]") {
+    // draft-16 SERVER_SETUP content: just a (here empty) param list.
     std::vector<uint8_t> content;
     uint8_t buf[8];
-    int32_t n;
-    n = encode_varint(kMoqVersion, buf);
-    content.insert(content.end(), buf, buf + n);
-    n = encode_varint(0, buf);  // 0 params
+    int32_t n = encode_varint(0, buf);  // 0 params
     content.insert(content.end(), buf, buf + n);
 
     ServerSetupResult result;
     REQUIRE(parse_server_setup(content.data(), static_cast<int32_t>(content.size()), result));
-    REQUIRE(result.version == kMoqVersion);
+    REQUIRE(result.version == kMoqVersion);  // reported (from ALPN), not on the wire
     REQUIRE(result.params.empty());
 }
 
-TEST_CASE("SERVER_SETUP parse with params", "[moq_setup]") {
-    std::vector<uint8_t> content;
-    uint8_t buf[8];
-    int32_t n;
-
-    // Version
-    n = encode_varint(kMoqVersion, buf);
-    content.insert(content.end(), buf, buf + n);
-
-    // 1 param: Role=PubSub (key=0x00, even, value=0x03)
-    n = encode_varint(1, buf);
-    content.insert(content.end(), buf, buf + n);
-    n = encode_varint(0x00, buf);
-    content.insert(content.end(), buf, buf + n);
-    n = encode_varint(0x03, buf);
-    content.insert(content.end(), buf, buf + n);
+TEST_CASE("SERVER_SETUP parses delta-encoded params", "[moq_setup]") {
+    // One even param: MAX_REQUEST_ID (0x02) = 50.
+    std::vector<KvpParam> params;
+    KvpParam p;
+    p.key = kParamKeyMaxSubscribeId;
+    p.int_value = 50;
+    params.push_back(p);
+    auto content = encode_params(params);
 
     ServerSetupResult result;
     REQUIRE(parse_server_setup(content.data(), static_cast<int32_t>(content.size()), result));
-    REQUIRE(result.version == kMoqVersion);
     REQUIRE(result.params.size() == 1);
-    REQUIRE(result.params[0].key == 0x00);
-    REQUIRE(result.params[0].int_value == 0x03);
+    REQUIRE(result.params[0].key == kParamKeyMaxSubscribeId);
+    REQUIRE(result.params[0].int_value == 50);
 }
 
 // ============================================================================
@@ -656,7 +715,8 @@ TEST_CASE("SUBSCRIBE build without auth (0 params)", "[moq_subscribe]") {
     REQUIRE(result.group_order == 0);
     REQUIRE(result.forward == 0);
     REQUIRE(result.filter_type == kFilterLatestGroup);
-    REQUIRE(result.params.empty());
+    // draft-16: priority/order/forward/filter ride in params; no auth param here.
+    REQUIRE(find_param(result, kParamKeyAuthToken) == nullptr);
 }
 
 TEST_CASE("SUBSCRIBE build with auth token (KVP 0x03)", "[moq_subscribe]") {
@@ -682,10 +742,10 @@ TEST_CASE("SUBSCRIBE build with auth token (KVP 0x03)", "[moq_subscribe]") {
     REQUIRE(result.track_namespace.size() == 4);
     REQUIRE(result.track_name.empty());
     REQUIRE(result.priority == 200);
-    REQUIRE(result.params.size() == 1);
-    REQUIRE(result.params[0].key == kParamKeyAuthToken);
-    std::string auth(result.params[0].bytes_value.begin(),
-                     result.params[0].bytes_value.end());
+    // draft-16: auth rides among the moved params — find it by key.
+    const KvpParam* authp = find_param(result, kParamKeyAuthToken);
+    REQUIRE(authp != nullptr);
+    std::string auth(authp->bytes_value.begin(), authp->bytes_value.end());
     REQUIRE(auth == "eyJ0ZXN0IjoiYXV0aCJ9");
 }
 
@@ -735,9 +795,10 @@ TEST_CASE("SUBSCRIBE wire bytes contain NO TrackAlias", "[moq_subscribe]") {
     REQUIRE(parse_control_message(msg.data(), static_cast<int32_t>(msg.size()),
                                   type, content, content_len, consumed));
 
-    // Parse content byte-by-byte to verify NO TrackAlias:
+    // Parse content byte-by-byte to verify NO TrackAlias. draft-16 layout:
     // [RequestID=1][NamespaceCount=1]["ns" len=2][0x6E,0x73]["t" len=1][0x74]
-    // [Priority=128][GroupOrder=0][Forward=0][FilterType=1][ParamCount=0]
+    // [ParamCount][delta params...] — i.e. the param list follows the track
+    // name directly, with no TrackAlias or inline priority byte between them.
     int32_t offset = 0;
     int32_t br = 0;
 
@@ -766,8 +827,9 @@ TEST_CASE("SUBSCRIBE wire bytes contain NO TrackAlias", "[moq_subscribe]") {
     REQUIRE(content[offset] == 't');
     offset += 1;
 
-    // Priority (1 byte) — next byte after track name, NOT a varint TrackAlias
-    REQUIRE(content[offset] == 128);
+    // Next is the parameter count (the 4 moved params), NOT a TrackAlias.
+    uint64_t param_count = decode_varint(content + offset, content_len - offset, br);
+    REQUIRE(param_count == 4);
 }
 
 TEST_CASE("SUBSCRIBE_OK build+parse roundtrip", "[moq_subscribe]") {
@@ -848,8 +910,8 @@ TEST_CASE("SUBSCRIBE_OK with content_exists=true", "[moq_subscribe]") {
 }
 
 TEST_CASE("SUBSCRIBE_ERROR parse", "[moq_subscribe]") {
-    // Build SUBSCRIBE_ERROR content manually:
-    // [RequestID=5][ErrorCode=0x01][ReasonPhrase="denied"][TrackAlias=0]
+    // Build draft-16 SUBSCRIBE_ERROR content manually:
+    // [RequestID=5][ErrorCode=0x01][RetryInterval=0][ReasonPhrase="denied"]
     std::vector<uint8_t> content;
     uint8_t buf[8];
     int32_t n;
@@ -858,21 +920,21 @@ TEST_CASE("SUBSCRIBE_ERROR parse", "[moq_subscribe]") {
     content.insert(content.end(), buf, buf + n);
     n = encode_varint(0x01, buf);
     content.insert(content.end(), buf, buf + n);
+    // Retry interval (new in draft-16)
+    n = encode_varint(0, buf);
+    content.insert(content.end(), buf, buf + n);
     // Reason phrase: length-prefixed string
     std::string reason = "denied";
     n = encode_varint(reason.size(), buf);
     content.insert(content.end(), buf, buf + n);
     content.insert(content.end(), reason.begin(), reason.end());
-    // TrackAlias
-    n = encode_varint(0, buf);
-    content.insert(content.end(), buf, buf + n);
 
     SubscribeErrorResult result;
     REQUIRE(parse_subscribe_error(content.data(), static_cast<int32_t>(content.size()), result));
     REQUIRE(result.request_id == 5);
     REQUIRE(result.error_code == 0x01);
     REQUIRE(result.reason == "denied");
-    REQUIRE(result.track_alias == 0);
+    REQUIRE(result.track_alias == 0);  // not present in draft-16
 }
 
 // ============================================================================
@@ -935,15 +997,16 @@ TEST_CASE("CLIENT_SETUP byte-for-byte match with UE plugin output", "[moq_compat
     //   2F                          # "/" (0x2F)
     //   02                          # key = MaxSubscribeId (0x02)
     //   40 64                       # value = 100 (2-byte varint)
+    // draft-16: no version list, no ROLE. Body is a delta-encoded param list:
+    //   [Type 0x20][Len 0x0007][ParamCount 2]
+    //   [delta 0x01][len 1]["/"]        # PATH (odd 0x01)
+    //   [delta 0x01][0x40 0x64 = 100]   # MAX_REQUEST_ID (even 0x02)
     const uint8_t expected[] = {
-        0x20,                                       // Type
-        0x00, 0x12,                                 // Length = 18
-        0x01,                                       // 1 version
-        0xC0, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x0B,  // version
-        0x03,                                       // 3 params
-        0x00, 0x03,                                 // Role = PubSub
-        0x01, 0x01, 0x2F,                           // Path = "/"
-        0x02, 0x40, 0x64,                           // MaxSubscribeId = 100
+        0x20,                   // Type = CLIENT_SETUP
+        0x00, 0x07,             // Length = 7
+        0x02,                   // 2 params
+        0x01, 0x01, 0x2F,       // PATH delta 0x01, len 1, "/"
+        0x01, 0x40, 0x64,       // MAX_REQUEST_ID delta 0x01, value 100
     };
 
     auto msg = build_client_setup();
@@ -965,18 +1028,22 @@ TEST_CASE("SUBSCRIBE byte-for-byte match with UE plugin output", "[moq_compat]")
     //   00              # Forward = 0
     //   01              # FilterType = LatestGroup
     //   00              # ParamCount = 0
+    // draft-16: priority/order/forward/filter moved into delta-encoded params.
+    //   [Type 0x03][Len][RequestID 1][NsCount 1]["ns"]["t"]
+    //   [ParamCount 4][forward 0x10=0][priority 0x20=128][filter 0x21=[0x01]]
+    //   [order 0x22=0]  (sorted ascending, delta-encoded)
     const uint8_t expected[] = {
         0x03,                   // Type = SUBSCRIBE
-        0x00, 0x0C,             // Length = 12
+        0x00, 0x12,             // Length = 18
         0x01,                   // RequestID = 1
         0x01,                   // Namespace count = 1
-        0x02, 0x6E, 0x73,      // "ns"
+        0x02, 0x6E, 0x73,       // "ns"
         0x01, 0x74,             // "t"
-        0x80,                   // Priority = 128
-        0x00,                   // GroupOrder
-        0x00,                   // Forward
-        0x01,                   // FilterType = LatestGroup
-        0x00,                   // 0 params
+        0x04,                   // 4 params
+        0x10, 0x00,             // FORWARD delta 0x10, value 0
+        0x10, 0x40, 0x80,       // SUBSCRIBER_PRIORITY delta 0x10, value 128
+        0x01, 0x01, 0x01,       // SUBSCRIPTION_FILTER delta 0x01, len 1, [0x01]
+        0x01, 0x00,             // GROUP_ORDER delta 0x01, value 0
     };
 
     SubscribeConfig config;
@@ -984,8 +1051,98 @@ TEST_CASE("SUBSCRIBE byte-for-byte match with UE plugin output", "[moq_compat]")
     config.track_namespace = {"ns"};
     config.track_name = "t";
     config.priority = 128;
+    config.group_order = 0;
+    config.forward = 0;
+    config.filter_type = kFilterLatestGroup;  // 0x01
 
     auto msg = build_subscribe(config);
     REQUIRE(msg.size() == sizeof(expected));
     REQUIRE(std::memcmp(msg.data(), expected, sizeof(expected)) == 0);
+}
+
+// ============================================================================
+// Golden vectors [moq_golden]
+// ============================================================================
+// Byte-exact assertions against the wire emitted by Eyevinn/moqtransport (our
+// draft-16 server). The expected hex is from
+// spatial-mixer/plan/moq-draft14/golden/draft16-vectors.json — the SAME
+// fixtures the TS codec is validated against, so all three ends agree byte for
+// byte. If the server's encoder changes, regenerate that file and update here.
+
+static std::vector<uint8_t> from_hex(const std::string& h) {
+    std::vector<uint8_t> out;
+    for (size_t i = 0; i + 1 < h.size(); i += 2) {
+        out.push_back(static_cast<uint8_t>(std::stoi(h.substr(i, 2), nullptr, 16)));
+    }
+    return out;
+}
+
+TEST_CASE("golden: SUBSCRIBE audio-out with auth + resume", "[moq_golden]") {
+    SubscribeConfig sub;
+    sub.request_id = 2;
+    sub.track_namespace = {"out", "audio", "opus-stereo", "node-1"};
+    sub.track_name = "";
+    sub.priority = 128;
+    sub.group_order = 1;  // ascending
+    sub.forward = 1;
+    sub.filter_type = kFilterLatestObject;  // 0x02
+    sub.authorization = "test-jwt-token";
+    KvpParam resume;
+    resume.key = 0xFF01;
+    resume.bytes_value = {0x00, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab};
+    sub.extra_params.push_back(resume);
+
+    auto wire = build_subscribe(sub);
+    REQUIRE(wire == from_hex(
+        "0300480204036f757405617564696f0b6f7075732d73746572656f066e6f64652d3100"
+        "06030e746573742d6a77742d746f6b656e0d0110408001010201018000fedf08000001"
+        "23456789ab"));
+}
+
+TEST_CASE("golden: SUBSCRIBE audio-out plain", "[moq_golden]") {
+    SubscribeConfig sub;
+    sub.request_id = 4;
+    sub.track_namespace = {"out", "audio", "opus-stereo", "node-1"};
+    sub.track_name = "";
+    sub.priority = 128;
+    sub.group_order = 1;
+    sub.forward = 1;
+    sub.filter_type = kFilterLatestObject;
+
+    auto wire = build_subscribe(sub);
+    REQUIRE(wire == from_hex(
+        "03002b0404036f757405617564696f0b6f7075732d73746572656f066e6f64652d3100"
+        "0410011040800101020101"));
+}
+
+TEST_CASE("golden: SUBSCRIBE_OK", "[moq_golden]") {
+    SubscribeOkConfig ok;
+    ok.request_id = 2;
+    ok.track_alias = 4;
+    ok.expires_ms = 0;
+    ok.group_order = 1;
+    ok.content_exists = true;
+    ok.largest_group_id = 10;
+    ok.largest_object_id = 5;
+
+    auto wire = build_subscribe_ok(ok);
+    REQUIRE(wire == from_hex("04000902040209020a051901"));
+}
+
+TEST_CASE("golden: ANNOUNCE audio-in", "[moq_golden]") {
+    AnnounceConfig ann;
+    ann.request_id = 6;
+    ann.track_namespace = {"in", "audio", "opus-mono", "node-1"};
+
+    auto wire = build_announce(ann);
+    REQUIRE(wire == from_hex(
+        "06001d060402696e05617564696f096f7075732d6d6f6e6f066e6f64652d3100"));
+}
+
+TEST_CASE("golden: OBJECT_DATAGRAM audio (wire-identical to draft-11)", "[moq_golden]") {
+    std::vector<uint8_t> payload = {0xfc, 0xff, 0xfe, 0x01, 0x02};
+    auto wire = build_object_datagram(4, 1700000000123ull, 0, 0,
+                                      payload.data(),
+                                      static_cast<int32_t>(payload.size()));
+    REQUIRE(wire == from_hex("0004c000018bcfe5687b0000fcfffe0102"));
 }

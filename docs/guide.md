@@ -12,13 +12,16 @@ The existing Panaudia Unreal plugin uses libpanaudia-core, we are planning on tw
 
 ## Dependencies
 
-| Library | Version | Purpose |
-|---|---|---|
-| [msquic](https://github.com/microsoft/msquic) | `ed14762f5d55` (~v2.6.0) | QUIC transport (built as static library) |
-| [libopus](https://opus-codec.org/) | v1.5.2 | Audio codec |
-| [Catch2](https://github.com/catchorg/Catch2) | v3.7.1 | Test framework (dev only) |
+| Library | Version | Purpose | Used by |
+|---|---|---|---|
+| [msquic](https://github.com/microsoft/msquic) | `ed14762f5d55` (~v2.6.0) | QUIC transport (built as static library) | `panaudia-core` |
+| [libopus](https://opus-codec.org/) | v1.5.2 | Audio codec | `panaudia-core` |
+| [nlohmann/json](https://github.com/nlohmann/json) | v3.11.3 | JSON parsing for the attribute cache | `panaudia-statecache` |
+| [Catch2](https://github.com/catchorg/Catch2) | v3.7.1 | Test framework (dev only) | tests |
 
-All dependencies are fetched automatically via CMake FetchContent.
+All dependencies are fetched automatically via CMake FetchContent. The JSON
+dependency is scoped to the `panaudia-statecache` target only — `panaudia-core`
+links msquic + libopus exclusively.
 
 ## Building
 
@@ -32,12 +35,17 @@ Build targets:
 
 | Target | Description |
 |---|---|
-| `panaudia-core` | Static library (`libpanaudia-core.a`) |
-| `panaudia-core-tests` | Unit tests (167 tests, 5211 assertions) |
+| `panaudia-core` | Transport static library (`libpanaudia-core.a`) — msquic + libopus |
+| `panaudia-statecache` | Attribute-cache static library (`libpanaudia-statecache.a`) — nlohmann/json; no transport dependency |
+| `panaudia-core-tests` | Core unit tests (Catch2) |
+| `panaudia-statecache-tests` | Statecache unit tests (Catch2) |
 | `panaudia-bench` | Buffer and codec benchmarks |
 | `panaudia-test-harness` | Standalone RT callback simulation |
 
-Install layout: `lib/libpanaudia-core.a` + `include/panaudia/*.h`.
+Install layout: `lib/libpanaudia-core.a`, `lib/libpanaudia-statecache.a`, and
+`include/panaudia/*.h` (headers for both libraries share the `panaudia/` prefix).
+Hosts that use the attribute cache link both libraries; transport-only hosts may
+link `panaudia-core` alone.
 
 For the Unreal Engine plugin, there is a convenience script:
 
@@ -144,6 +152,14 @@ void my_data_handler(panaudia::TrackHandle* track,
 }
 ```
 
+Data-track payloads are **opaque** to `panaudia-core` — it delivers raw bytes
+and never inspects them. Application formats (e.g. the `NodeInfo3` position
+struct, or the `0xCA` attribute-cache envelope) are decoded by the host. For the
+attribute cache, feed inbound bytes to a `panaudia::TopicMerger` from
+`panaudia-statecache` (`<panaudia/topic_merger.h>`); it decodes the envelope,
+merges by op-ID, and exposes the merged key/value map. See
+[plan/extract-statecache.md](../plan/extract-statecache.md).
+
 ### Status and Monitoring
 
 ```cpp
@@ -174,6 +190,13 @@ enum class LogLevel        { Trace, Debug, Info, Warn, Error };
 using DataRecvCallback = void(*)(TrackHandle* track, const uint8_t* data, uint32_t data_len, void* ctx);
 using StatusCallback   = void(*)(ConnectionState state, const char* message, void* ctx);
 using LogCallback      = void(*)(LogLevel level, const char* message, void* ctx);
+
+// Optional: invoked before each (re)SUBSCRIBE so the host can attach opaque
+// key/value params (e.g. a cache-resume op-ID from panaudia-statecache). The
+// core forwards them to the wire verbatim and never interprets them.
+struct SubscribeParam { uint64_t key; std::vector<uint8_t> value; };
+using SubscribeParamsCallback =
+    void(*)(TrackHandle* track, std::vector<SubscribeParam>& out, void* ctx);
 ```
 
 ### Reconnection

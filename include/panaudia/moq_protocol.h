@@ -8,12 +8,18 @@ namespace panaudia {
 namespace moq {
 
 // ---------------------------------------------------------------------------
-// Constants — pinned to moqtransport commit 3b0932de5aeb
-// See plan/moq_protocol_wire_format.md for full protocol documentation.
+// Constants — IETF MOQ draft-16, as emitted by Eyevinn/moqtransport (our
+// server). See spatial-mixer/plan/moq-draft14/wire-delta-16.md for the
+// draft-11 -> draft-16 delta and golden/draft16-vectors.json for byte-exact
+// fixtures. Key draft-16 changes: KVP params are delta-encoded; SUBSCRIBE /
+// SUBSCRIBE_OK move several fields into parameters; CLIENT_SETUP drops the
+// version list + ROLE; SERVER_SETUP has no version field. The auth token
+// stays raw JWT bytes (Eyevinn does not use the spec Token struct). The
+// OBJECT_DATAGRAM and ANNOUNCE wire formats are unchanged.
 // ---------------------------------------------------------------------------
 
-constexpr uint64_t kMoqVersion = 0xff00000b;  // draft-11 era
-constexpr const char* kMoqAlpn = "moq-00";
+constexpr uint64_t kMoqVersion = 0xff000010;  // draft-16
+constexpr const char* kMoqAlpn = "moqt-16";
 
 // Control message types (sent on bidirectional control stream)
 enum class MessageType : uint64_t {
@@ -33,11 +39,24 @@ enum class MessageType : uint64_t {
 constexpr uint64_t kDatagramTypePlain      = 0x00;
 constexpr uint64_t kDatagramTypeExtensions = 0x01;
 
-// KVP parameter keys
-constexpr uint64_t kParamKeyRole           = 0x00;  // even → bare varint
-constexpr uint64_t kParamKeyPath           = 0x01;  // odd  → length-prefixed bytes
+// Setup parameter keys
+constexpr uint64_t kParamKeyPath           = 0x01;  // odd  → length-prefixed bytes (QUIC only)
 constexpr uint64_t kParamKeyMaxSubscribeId = 0x02;  // even → bare varint
 constexpr uint64_t kParamKeyAuthToken      = 0x03;  // odd  → length-prefixed bytes
+
+// draft-16 SUBSCRIBE parameter keys (fields moved out of the message body)
+constexpr uint64_t kParamKeyForward            = 0x10;  // even → varint (bool)
+constexpr uint64_t kParamKeySubscriberPriority = 0x20;  // even → varint
+constexpr uint64_t kParamKeySubscriptionFilter = 0x21;  // odd  → bytes [filterType][start?][endGroup?]
+constexpr uint64_t kParamKeyGroupOrder         = 0x22;  // even → varint
+
+// draft-16 SUBSCRIBE_OK parameter keys
+constexpr uint64_t kParamKeyExpires       = 0x08;  // even → varint (ms)
+constexpr uint64_t kParamKeyLargestObject = 0x09;  // odd  → bytes (Location: group, object)
+
+// Application-specific SUBSCRIBE parameters (e.g. the cache-resume key
+// 0xFF01) are NOT defined here — the core treats them as opaque KvpParams
+// the host supplies via SubscribeParam. See panaudia-statecache.
 
 // Role values
 constexpr uint64_t kRolePublisher  = 0x01;
@@ -170,7 +189,8 @@ struct SubscribeConfig {
     uint8_t group_order = 0;
     uint8_t forward = 0;
     uint64_t filter_type = kFilterLatestGroup;
-    std::string authorization;   // empty = no auth param
+    std::string authorization;          // empty = no auth param
+    std::vector<KvpParam> extra_params; // appended after the auth param
 };
 
 std::vector<uint8_t> build_subscribe(const SubscribeConfig& config);
