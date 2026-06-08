@@ -48,6 +48,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(opus)
 
+# nlohmann/json — JSON parsing for the topic merger
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+set(JSON_Install OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # --- Library ---
 
 add_library(panaudia-core STATIC
@@ -60,6 +71,9 @@ add_library(panaudia-core STATIC
     src/jitter_buffer.cpp
     src/send_worker.cpp
     src/recv_worker.cpp
+    src/cache_wire.cpp
+    src/cache_map.cpp
+    src/topic_merger.cpp
 )
 
 target_include_directories(panaudia-core
@@ -80,6 +94,7 @@ target_link_libraries(panaudia-core
     PRIVATE
         Opus::opus
         msquic
+        nlohmann_json::nlohmann_json
 )
 
 # msquic static build on Windows: transitive system libraries aren't propagated
@@ -96,6 +111,9 @@ add_executable(panaudia-core-tests
     tests/test_moq_protocol.cpp
     tests/test_moq_transport.cpp
     tests/test_session.cpp
+    tests/test_cache_wire.cpp
+    tests/test_cache_map.cpp
+    tests/test_topic_merger.cpp
 )
 
 target_compile_options(panaudia-core-tests PRIVATE ${PANAUDIA_WARNINGS})

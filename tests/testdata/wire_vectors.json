@@ -1,0 +1,62 @@
+[
+  {
+    "name": "normal_set",
+    "topic": "attributes",
+    "key": "abc-123",
+    "value_hex": "7b226e616d65223a22616c696365227d",
+    "op_id": 65536005,
+    "node_id": 42,
+    "tombstone": false,
+    "encoded_hex": "ca000000000003e800050000002a0a6174747269627574657300076162632d313233000000107b226e616d65223a22616c696365227d"
+  },
+  {
+    "name": "tombstone",
+    "topic": "attributes",
+    "key": "abc-123",
+    "value_hex": "",
+    "op_id": 131072000,
+    "node_id": 42,
+    "tombstone": true,
+    "encoded_hex": "ca010000000007d000000000002a0a6174747269627574657300076162632d31323300000000"
+  },
+  {
+    "name": "empty_value",
+    "topic": "state",
+    "key": "node-1",
+    "value_hex": "",
+    "op_id": 32768001,
+    "node_id": 1,
+    "tombstone": false,
+    "encoded_hex": "ca000000000001f400010000000105737461746500066e6f64652d3100000000"
+  },
+  {
+    "name": "max_key",
+    "topic": "attributes",
+    "key": "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+    "value_hex": "76",
+    "op_id": 655359999,
+    "node_id": 4294967295,
+    "tombstone": false,
+    "encoded_hex": "ca0000000000270fffffffffffff0a6174747269627574657300ff4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b0000000176"
+  },
+  {
+    "name": "all_zero_value",
+    "topic": "t",
+    "key": "k",
+    "value_hex": "0000000000000000",
+    "op_id": 65536,
+    "node_id": 0,
+    "tombstone": false,
+    "encoded_hex": "ca00000000000001000000000000017400016b000000080000000000000000"
+  },
+  {
+    "name": "all_ff_value",
+    "topic": "t",
+    "key": "k",
+    "value_hex": "ffffffffffffffff",
+    "op_id": 65536,
+    "node_id": 0,
+    "tombstone": false,
+    "encoded_hex": "ca00000000000001000000000000017400016b00000008ffffffffffffffff"
+  }
+]

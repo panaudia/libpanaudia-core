@@ -42,6 +42,7 @@ enum class LogLevel {
 // --- Forward declarations ---
 
 struct TrackHandle;
+class CacheMap;
 
 // --- Callbacks ---
 
@@ -62,6 +63,35 @@ using LogCallback = void (*)(LogLevel level,
                              const char* message,
                              void* ctx);
 
+// One key-value surfaced by the cache merger after a successful merge.
+// Strings reference buffers that are valid only for the duration of the
+// callback — copy before storing on another thread.
+struct CacheValueView {
+    const char* key;
+    uint32_t    key_len;
+    const char* value;       // JSON-serialised: "\"alice\"" / "42" / "true"
+    uint32_t    value_len;
+    uint32_t    node_id;     // origin node (informational)
+};
+
+// Fired once per cache envelope when at least one op was accepted (new
+// value or higher op_id replacing the cached one). Order within `values`
+// matches the JSON batch order.
+using CacheValuesCallback = void (*)(TrackHandle* track,
+                                     const CacheValueView* values,
+                                     uint32_t count,
+                                     uint64_t op_id,
+                                     void* ctx);
+
+// Fired once per cache envelope when at least one tombstone beat the
+// cache. `keys` is a contiguous array of NUL-terminated C strings valid
+// only for the duration of the callback.
+using CacheRemovedCallback = void (*)(TrackHandle* track,
+                                      const char* const* keys,
+                                      uint32_t count,
+                                      uint64_t op_id,
+                                      void* ctx);
+
 // --- Configuration ---
 
 struct TrackConfig {
@@ -81,6 +111,17 @@ struct TrackConfig {
     uint32_t opus_bitrate = 64000;
     uint32_t opus_frame_size_ms = 5;
     uint32_t pcm_frame_size_ms = 5;
+
+    // Cache-aware delivery for inbound data tracks. When true:
+    //   1. configure() attaches a TopicMerger to this track.
+    //   2. SUBSCRIBE includes the resume-opID parameter (KVP 0xFF01).
+    //   3. Inbound datagrams that decode as cache envelopes are merged
+    //      and surfaced via cache_values_callback / cache_removed_callback.
+    //   4. Inbound datagrams that are NOT envelopes fall through to the
+    //      regular data_recv_callback (preserves backward compatibility
+    //      with pre-cache servers — matches TS behaviour).
+    // Ignored for audio tracks and outbound tracks.
+    bool cached = false;
 };
 
 struct SessionConfig {
@@ -107,6 +148,12 @@ struct SessionConfig {
     LogCallback log_callback = nullptr;
     void* log_ctx = nullptr;
     LogLevel log_level = LogLevel::Info;
+
+    // Cache-aware delivery (only fires for tracks with cached=true).
+    CacheValuesCallback  cache_values_callback  = nullptr;
+    void*                cache_values_ctx       = nullptr;
+    CacheRemovedCallback cache_removed_callback = nullptr;
+    void*                cache_removed_ctx      = nullptr;
 
     // Reconnection
     uint32_t max_reconnect_attempts = 10;      // 0 = disabled
@@ -190,6 +237,15 @@ public:
     ConnectionState get_connection_state() const;
     BufferStatus get_buffer_status(TrackHandle* track) const;
     SessionStats get_stats() const;
+
+    // === Cache-aware data tracks ===
+
+    // Read-only access to the merged state of a cached track. Returns
+    // nullptr if the track doesn't exist or wasn't configured with
+    // cached=true. The pointer is stable for the lifetime of the
+    // session; the CacheMap is internally synchronised. Hosts must not
+    // mutate the map.
+    const CacheMap* get_cache_map(TrackHandle* track) const;
 
 private:
     struct Impl;

@@ -406,16 +406,38 @@ std::vector<uint8_t> build_subscribe(const SubscribeConfig& config) {
     // FilterType (varint)
     append_varint(content, config.filter_type);
 
-    // Parameters
+    // Parameters: auth (if present) followed by any extra_params.
+    std::vector<KvpParam> params;
+    params.reserve(1 + config.extra_params.size());
     if (!config.authorization.empty()) {
-        append_varint(content, 1);  // 1 parameter
-        append_varint(content, kParamKeyAuthToken);
-        append_string_bytes(content, config.authorization);
-    } else {
-        append_varint(content, 0);  // 0 parameters
+        KvpParam auth;
+        auth.key = kParamKeyAuthToken;
+        auth.bytes_value.assign(config.authorization.begin(),
+                                config.authorization.end());
+        params.push_back(std::move(auth));
     }
+    for (const auto& p : config.extra_params) {
+        params.push_back(p);
+    }
+    auto encoded_params = encode_params(params);
+    content.insert(content.end(), encoded_params.begin(), encoded_params.end());
 
     return build_control_message(MessageType::Subscribe, content);
+}
+
+// ---------------------------------------------------------------------------
+// Resume opID parameter helper
+// ---------------------------------------------------------------------------
+
+KvpParam make_resume_op_id_param(uint64_t op_id) {
+    KvpParam p;
+    p.key = kParamKeyResumeOpId;
+    p.bytes_value.resize(8);
+    for (int i = 7; i >= 0; --i) {
+        p.bytes_value[i] = static_cast<uint8_t>(op_id & 0xFF);
+        op_id >>= 8;
+    }
+    return p;
 }
 
 bool parse_subscribe(const uint8_t* content, int32_t content_len,

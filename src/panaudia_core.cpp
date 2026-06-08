@@ -65,4 +65,8 @@ SessionStats PanaudiaCore::get_stats() const {
     return impl_->session.get_stats();
 }
 
+const CacheMap* PanaudiaCore::get_cache_map(TrackHandle* track) const {
+    return impl_->session.get_cache_map(track);
+}
+
 }  // namespace panaudia
