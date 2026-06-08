@@ -571,6 +571,10 @@ void SessionManager::start_orchestration() {
             sub.track_namespace = t->config.moq_namespace;
             sub.track_name = t->config.moq_track_name;
             sub.filter_type = moq::kFilterLatestGroup;
+            // We want objects delivered (forward=1) in ascending group order;
+            // the struct default forward=0 would tell the publisher not to send.
+            sub.forward = 1;
+            sub.group_order = 1;  // ascending
 
             // Attach JWT on first SUBSCRIBE only
             if (!first_subscribe_sent_ && !config_.jwt.empty()) {
