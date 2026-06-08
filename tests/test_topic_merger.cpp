@@ -306,3 +306,27 @@ TEST_CASE("Debug handler reports accepted/tombstoned/rejected per envelope",
     // tombstoned (matches TS behaviour)
     REQUIRE(captured.tombstoned_keys == std::vector<std::string>{"a.gone"});
 }
+
+// ============================================================================
+// Resume parameter encoding [resume]
+// ============================================================================
+
+TEST_CASE("encode_resume_op_id is 8-byte big-endian", "[resume]") {
+    auto b = encode_resume_op_id(0x0102030405060708ull);
+    REQUIRE(b.size() == 8);
+    REQUIRE(b[0] == 0x01);
+    REQUIRE(b[1] == 0x02);
+    REQUIRE(b[2] == 0x03);
+    REQUIRE(b[3] == 0x04);
+    REQUIRE(b[4] == 0x05);
+    REQUIRE(b[5] == 0x06);
+    REQUIRE(b[6] == 0x07);
+    REQUIRE(b[7] == 0x08);
+}
+
+TEST_CASE("encode_resume_op_id zero", "[resume]") {
+    auto b = encode_resume_op_id(0);
+    REQUIRE(b.size() == 8);
+    for (auto x : b) REQUIRE(x == 0);
+    REQUIRE(kResumeParamKey == 0xFF01);
+}

@@ -39,10 +39,9 @@ constexpr uint64_t kParamKeyPath           = 0x01;  // odd  → length-prefixed 
 constexpr uint64_t kParamKeyMaxSubscribeId = 0x02;  // even → bare varint
 constexpr uint64_t kParamKeyAuthToken      = 0x03;  // odd  → length-prefixed bytes
 
-// Panaudia-specific SUBSCRIBE parameter — resume from this opID on the
-// cached topic. Odd → length-prefixed bytes; value is 8 bytes uint64
-// big-endian. Documented in spatial-mixer/CLAUDE.md.
-constexpr uint64_t kParamKeyResumeOpId     = 0xFF01;
+// Application-specific SUBSCRIBE parameters (e.g. the cache-resume key
+// 0xFF01) are NOT defined here — the core treats them as opaque KvpParams
+// the host supplies via SubscribeParam. See panaudia-statecache.
 
 // Role values
 constexpr uint64_t kRolePublisher  = 0x01;
@@ -180,10 +179,6 @@ struct SubscribeConfig {
 };
 
 std::vector<uint8_t> build_subscribe(const SubscribeConfig& config);
-
-// Build the resume-opID KVP for a SUBSCRIBE parameters list. Push the
-// returned param into SubscribeConfig::extra_params for cached tracks.
-KvpParam make_resume_op_id_param(uint64_t op_id);
 
 struct SubscribeResult {
     uint64_t request_id = 0;

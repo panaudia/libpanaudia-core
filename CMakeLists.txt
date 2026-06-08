@@ -61,6 +61,8 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 # --- Library ---
 
+# panaudia-core — pure transport (MOQ/QUIC/Opus). Dependencies: msquic + libopus
+# ONLY. No JSON, no application semantics. See plan/plan.md.
 add_library(panaudia-core STATIC
     src/panaudia_core.cpp
     src/session_manager.cpp
@@ -71,9 +73,6 @@ add_library(panaudia-core STATIC
     src/jitter_buffer.cpp
     src/send_worker.cpp
     src/recv_worker.cpp
-    src/cache_wire.cpp
-    src/cache_map.cpp
-    src/topic_merger.cpp
 )
 
 target_include_directories(panaudia-core
@@ -94,13 +93,38 @@ target_link_libraries(panaudia-core
     PRIVATE
         Opus::opus
         msquic
-        nlohmann_json::nlohmann_json
 )
 
 # msquic static build on Windows: transitive system libraries aren't propagated
 if(WIN32)
     target_link_libraries(panaudia-core PRIVATE ws2_32 schannel ntdll bcrypt ncrypt crypt32 iphlpapi advapi32)
 endif()
+
+# --- panaudia-statecache (attribute/topic cache + merge) ---
+# Application-semantics layer that sits ABOVE the pure-transport core: decodes
+# the 0xCA cache envelope, merges by opID with tombstones, parses JSON. Owns the
+# nlohmann/json dependency. Hosts (Unreal plugin, Swift client) link this
+# alongside panaudia-core; the core never depends on it. Byte-compatible peer of
+# spatial-mixer/core/statecache (Go) and panaudia-client .../src/shared (TS).
+# See plan/extract-statecache.md.
+add_library(panaudia-statecache STATIC
+    src/cache_wire.cpp
+    src/cache_map.cpp
+    src/topic_merger.cpp
+)
+
+target_include_directories(panaudia-statecache
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_compile_options(panaudia-statecache PRIVATE ${PANAUDIA_WARNINGS})
+
+target_link_libraries(panaudia-statecache
+    PRIVATE
+        nlohmann_json::nlohmann_json
+)
 
 # --- Tests ---
 
@@ -111,9 +135,6 @@ add_executable(panaudia-core-tests
     tests/test_moq_protocol.cpp
     tests/test_moq_transport.cpp
     tests/test_session.cpp
-    tests/test_cache_wire.cpp
-    tests/test_cache_map.cpp
-    tests/test_topic_merger.cpp
 )
 
 target_compile_options(panaudia-core-tests PRIVATE ${PANAUDIA_WARNINGS})
@@ -127,6 +148,23 @@ target_link_libraries(panaudia-core-tests
 include(CTest)
 include(Catch)
 catch_discover_tests(panaudia-core-tests)
+
+# statecache tests (own target — exercises the extracted cache library)
+add_executable(panaudia-statecache-tests
+    tests/test_cache_wire.cpp
+    tests/test_cache_map.cpp
+    tests/test_topic_merger.cpp
+)
+
+target_compile_options(panaudia-statecache-tests PRIVATE ${PANAUDIA_WARNINGS})
+
+target_link_libraries(panaudia-statecache-tests
+    PRIVATE
+        panaudia-statecache
+        Catch2::Catch2WithMain
+)
+
+catch_discover_tests(panaudia-statecache-tests)
 
 # --- Benchmarks ---
 
@@ -158,7 +196,7 @@ target_link_libraries(panaudia-test-harness
 
 # --- Install ---
 
-install(TARGETS panaudia-core
+install(TARGETS panaudia-core panaudia-statecache
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )

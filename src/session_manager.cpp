@@ -1,7 +1,5 @@
 #include "panaudia/session_manager.h"
-#include "panaudia/cache_map.h"
 #include "panaudia/moq_protocol.h"
-#include "panaudia/topic_merger.h"
 
 #include <chrono>
 #include <cstdarg>
@@ -172,15 +170,9 @@ void SessionManager::configure(const SessionConfig& config) {
                 handle->decode_buffer.resize(960 * tc.channels);
             }
         }
-        // Data tracks: no buffers or codecs needed.
-        // For cached inbound data tracks, attach a TopicMerger that will
-        // gate by op_id and surface accepted/tombstoned ops via the
-        // cache callbacks on SessionConfig.
-        if (tc.type == TrackType::Data
-            && tc.direction == TrackDirection::Inbound
-            && tc.cached) {
-            handle->merger = std::make_unique<TopicMerger>();
-        }
+        // Data tracks: no buffers or codecs needed. Inbound data-track
+        // payloads are delivered to the host as opaque bytes via
+        // data_recv_callback; any cache/merge semantics live in the host.
 
         name_map_[tc.name] = handle.get();
         tracks_.push_back(std::move(handle));
@@ -586,12 +578,19 @@ void SessionManager::start_orchestration() {
                 first_subscribe_sent_ = true;
             }
 
-            // Cached tracks send their resume opID. On first connect this
-            // is 0 (server treats it as "send full snapshot"); on reconnect
-            // it filters down to ops the client hasn't seen yet.
-            if (t->merger) {
-                sub.extra_params.push_back(
-                    moq::make_resume_op_id_param(t->merger->resume_op_id()));
+            // Let the host attach opaque subscribe params (e.g. a cache-
+            // resume parameter recomputed from its current state). The core
+            // does not interpret them — it just forwards them to the wire.
+            if (config_.subscribe_params_callback) {
+                std::vector<SubscribeParam> host_params;
+                config_.subscribe_params_callback(
+                    t.get(), host_params, config_.subscribe_params_ctx);
+                for (auto& sp : host_params) {
+                    moq::KvpParam kp;
+                    kp.key = sp.key;
+                    kp.bytes_value = std::move(sp.value);
+                    sub.extra_params.push_back(std::move(kp));
+                }
             }
 
             t->moq_request_id = next_request_id_;
@@ -957,59 +956,13 @@ void SessionManager::dispatch_data_datagram(TrackHandle* track,
                                               int32_t payload_len) {
     if (payload_len <= 0) return;
 
-    // Cached track: try cache-envelope path first.
-    if (track->merger) {
-        auto result = track->merger->apply_envelope(
-            payload, static_cast<size_t>(payload_len));
-        if (result.has_value()) {
-            const uint64_t op_id = track->merger->resume_op_id();
-
-            if (!result->accepted.empty() && config_.cache_values_callback) {
-                std::vector<CacheValueView> views;
-                views.reserve(result->accepted.size());
-                for (const auto& v : result->accepted) {
-                    CacheValueView vv;
-                    vv.key       = v.key.data();
-                    vv.key_len   = static_cast<uint32_t>(v.key.size());
-                    vv.value     = v.value.data();
-                    vv.value_len = static_cast<uint32_t>(v.value.size());
-                    vv.node_id   = 0;  // see TODO below
-                    views.push_back(vv);
-                }
-                config_.cache_values_callback(
-                    track, views.data(),
-                    static_cast<uint32_t>(views.size()),
-                    op_id, config_.cache_values_ctx);
-            }
-
-            if (!result->tombstoned.empty() && config_.cache_removed_callback) {
-                std::vector<const char*> ptrs;
-                ptrs.reserve(result->tombstoned.size());
-                for (const auto& k : result->tombstoned) {
-                    ptrs.push_back(k.c_str());
-                }
-                config_.cache_removed_callback(
-                    track, ptrs.data(),
-                    static_cast<uint32_t>(ptrs.size()),
-                    op_id, config_.cache_removed_ctx);
-            }
-            return;
-        }
-        // Fall-through: payload was not a cache envelope. Treat as raw —
-        // matches TS behaviour that preserves backward compat with
-        // pre-cache servers.
-    }
-
+    // Data-track payloads are opaque to the core — delivered raw to the
+    // host, which owns any decode/merge/cache semantics.
     if (config_.data_recv_callback) {
         config_.data_recv_callback(
             track, payload, static_cast<uint32_t>(payload_len),
             config_.data_recv_ctx);
     }
-}
-
-const CacheMap* SessionManager::get_cache_map(TrackHandle* track) const {
-    if (!track || !track->merger) return nullptr;
-    return track->merger->cache().get();
 }
 
 // ---------------------------------------------------------------------------

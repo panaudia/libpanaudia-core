@@ -6,42 +6,33 @@
 using namespace panaudia::moq;
 
 // ============================================================================
-// Resume opID parameter [moq_resume]
+// SUBSCRIBE extra_params — generic opaque KVP pass-through [moq_params]
 // ============================================================================
+// (The cache-resume param itself, key 0xFF01, is an application convention
+//  tested in panaudia-statecache; here we only verify the core forwards
+//  arbitrary host-supplied params on the wire.)
 
-TEST_CASE("make_resume_op_id_param encodes 8-byte big-endian", "[moq_resume]") {
-    auto p = make_resume_op_id_param(0x0102030405060708ull);
-    REQUIRE(p.key == kParamKeyResumeOpId);
-    REQUIRE(p.bytes_value.size() == 8);
-    REQUIRE(p.bytes_value[0] == 0x01);
-    REQUIRE(p.bytes_value[1] == 0x02);
-    REQUIRE(p.bytes_value[2] == 0x03);
-    REQUIRE(p.bytes_value[3] == 0x04);
-    REQUIRE(p.bytes_value[4] == 0x05);
-    REQUIRE(p.bytes_value[5] == 0x06);
-    REQUIRE(p.bytes_value[6] == 0x07);
-    REQUIRE(p.bytes_value[7] == 0x08);
+// Build an odd-key (length-prefixed bytes) KVP, as a host would for an
+// opaque subscribe param.
+static KvpParam make_bytes_param(uint64_t key, std::vector<uint8_t> v) {
+    KvpParam p;
+    p.key = key;
+    p.bytes_value = std::move(v);
+    return p;
 }
 
-TEST_CASE("make_resume_op_id_param zero", "[moq_resume]") {
-    auto p = make_resume_op_id_param(0);
-    REQUIRE(p.bytes_value.size() == 8);
-    for (auto b : p.bytes_value) REQUIRE(b == 0);
-}
-
-TEST_CASE("SUBSCRIBE with extra_params encodes them after auth", "[moq_resume]") {
+TEST_CASE("SUBSCRIBE with extra_params encodes them after auth", "[moq_params]") {
     SubscribeConfig sub;
     sub.request_id = 7;
     sub.track_namespace = {"out", "attributes", "uuid"};
     sub.track_name = "";
     sub.authorization = "JWT";
-    sub.extra_params.push_back(make_resume_op_id_param(42));
+    sub.extra_params.push_back(make_bytes_param(0xFF01, {0, 0, 0, 0, 0, 0, 0, 42}));
 
     auto wire = build_subscribe(sub);
     // Re-parse and verify both params come back.
     SubscribeResult r;
-    // Skip [type varint][len 2 bytes] of build_control_message:
-    // type = 0x03 (1 byte varint), len = 2 bytes.
+    // Skip [type varint][len 2 bytes]: type = 0x03 (1 byte varint), len = 2 bytes.
     REQUIRE(wire.size() > 3);
     REQUIRE(wire[0] == 0x03);  // SUBSCRIBE
     const int32_t content_len = static_cast<int32_t>((wire[1] << 8) | wire[2]);
@@ -52,21 +43,17 @@ TEST_CASE("SUBSCRIBE with extra_params encodes them after auth", "[moq_resume]")
     REQUIRE(r.params[0].key == kParamKeyAuthToken);
     REQUIRE(std::string(r.params[0].bytes_value.begin(),
                         r.params[0].bytes_value.end()) == "JWT");
-    // Second param = resume opID, 8 bytes BE = 42
-    REQUIRE(r.params[1].key == kParamKeyResumeOpId);
+    // Second param = the opaque host param, forwarded verbatim.
+    REQUIRE(r.params[1].key == 0xFF01);
     REQUIRE(r.params[1].bytes_value.size() == 8);
-    uint64_t decoded = 0;
-    for (size_t i = 0; i < 8; ++i) {
-        decoded = (decoded << 8) | r.params[1].bytes_value[i];
-    }
-    REQUIRE(decoded == 42);
+    REQUIRE(r.params[1].bytes_value[7] == 42);
 }
 
-TEST_CASE("SUBSCRIBE without auth still encodes extra_params", "[moq_resume]") {
+TEST_CASE("SUBSCRIBE without auth still encodes extra_params", "[moq_params]") {
     SubscribeConfig sub;
     sub.request_id = 9;
     sub.track_namespace = {"out", "attributes", "uuid"};
-    sub.extra_params.push_back(make_resume_op_id_param(100));
+    sub.extra_params.push_back(make_bytes_param(0xFF01, {0, 0, 0, 0, 0, 0, 0, 100}));
 
     auto wire = build_subscribe(sub);
     SubscribeResult r;
@@ -74,7 +61,7 @@ TEST_CASE("SUBSCRIBE without auth still encodes extra_params", "[moq_resume]") {
     const int32_t content_len = static_cast<int32_t>((wire[1] << 8) | wire[2]);
     REQUIRE(parse_subscribe(wire.data() + 3, content_len, r));
     REQUIRE(r.params.size() == 1);
-    REQUIRE(r.params[0].key == kParamKeyResumeOpId);
+    REQUIRE(r.params[0].key == 0xFF01);
 }
 
 // ============================================================================

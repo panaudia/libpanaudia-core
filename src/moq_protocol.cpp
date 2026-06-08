@@ -425,21 +425,6 @@ std::vector<uint8_t> build_subscribe(const SubscribeConfig& config) {
     return build_control_message(MessageType::Subscribe, content);
 }
 
-// ---------------------------------------------------------------------------
-// Resume opID parameter helper
-// ---------------------------------------------------------------------------
-
-KvpParam make_resume_op_id_param(uint64_t op_id) {
-    KvpParam p;
-    p.key = kParamKeyResumeOpId;
-    p.bytes_value.resize(8);
-    for (int i = 7; i >= 0; --i) {
-        p.bytes_value[i] = static_cast<uint8_t>(op_id & 0xFF);
-        op_id >>= 8;
-    }
-    return p;
-}
-
 bool parse_subscribe(const uint8_t* content, int32_t content_len,
                      SubscribeResult& result) {
     int32_t offset = 0;

@@ -6,6 +6,15 @@
 
 namespace panaudia {
 
+std::vector<uint8_t> encode_resume_op_id(uint64_t op_id) {
+    std::vector<uint8_t> bytes(8);
+    for (int i = 7; i >= 0; --i) {
+        bytes[i] = static_cast<uint8_t>(op_id & 0xFF);
+        op_id >>= 8;
+    }
+    return bytes;
+}
+
 namespace {
 
 using json = nlohmann::json;

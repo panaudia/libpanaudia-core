@@ -14,6 +14,16 @@
 
 namespace panaudia {
 
+// Cache-resume SUBSCRIBE parameter convention (Panaudia-specific, shared
+// across hosts and languages — see spatial-mixer/CLAUDE.md). The host reads
+// resume_op_id() from its merger and attaches {kResumeParamKey,
+// encode_resume_op_id(op_id)} as an opaque SubscribeParam. The transport
+// core stays unaware of what this means.
+inline constexpr uint64_t kResumeParamKey = 0xFF01;  // odd → length-prefixed bytes
+
+// 8-byte big-endian encoding of an op_id for the resume parameter value.
+std::vector<uint8_t> encode_resume_op_id(uint64_t op_id);
+
 // One key-value pair surfaced after a successful merge. `value` is the
 // JSON-serialised representation of the inner op's `value` field —
 // "\"alice\"", "42", "true", "null". Tombstones never appear here.

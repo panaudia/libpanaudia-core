@@ -16,9 +16,6 @@
 
 namespace panaudia {
 
-// Forward decl — keeps topic_merger.h out of this header.
-class TopicMerger;
-
 // ---------------------------------------------------------------------------
 // TrackHandle — created by configure(), looked up by get_track()
 //
@@ -51,10 +48,6 @@ struct TrackHandle {
 
     // Pre-allocated recv decode buffer (inbound audio only, sized in configure)
     std::vector<float> decode_buffer;          // 960 * channels (covers up to 20ms @ 48kHz)
-
-    // Cache merger (inbound data tracks with config.cached only).
-    // Survives reconnect because TrackHandle outlives start_orchestration().
-    std::unique_ptr<TopicMerger> merger;
 };
 
 // ---------------------------------------------------------------------------
@@ -95,9 +88,6 @@ public:
     ConnectionState get_connection_state() const;
     BufferStatus get_buffer_status(TrackHandle* track) const;
     SessionStats get_stats() const;
-
-    // Cache-aware tracks
-    const CacheMap* get_cache_map(TrackHandle* track) const;
 
 private:
     SessionConfig config_;
