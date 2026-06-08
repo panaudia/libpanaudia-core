@@ -1,7 +1,16 @@
 # MOQ Protocol Wire Format — Pinned Reference
 
-This document describes the exact MOQ wire format used by libpanaudia-core.
-It is pinned to the `moqtransport` Go library at commit `3b0932de5aeb`
+> ⚠️ **HISTORICAL (draft-11).** libpanaudia-core now targets **draft-16**
+> (Eyevinn/moqtransport; version `0xff000010`, ALPN `moqt-16`). The byte-level
+> examples below are the *old* draft-11 format and are kept only as historical
+> reference. For the current wire format see
+> [docs/moq-compatibility.md](../docs/moq-compatibility.md) and the
+> draft-11→16 delta in
+> `spatial-mixer/plan/moq-draft14/wire-delta-16.md`; the authoritative byte
+> fixtures live in `tests/test_moq_protocol.cpp` `[moq_golden]`.
+
+This document describes the MOQ wire format originally used by libpanaudia-core.
+It was pinned to the `moqtransport` Go library at commit `3b0932de5aeb`
 (pseudo-version `v0.5.1-0.20251006143843-3b0932de5aeb`).
 
 **Version number:** `0xff00000b` (0xff000000 + 11, draft-11 era)

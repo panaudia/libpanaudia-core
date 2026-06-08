@@ -16,6 +16,23 @@ The library handles everything between the ring buffers and the network: Opus en
 
 ## Architecture
 
+### Two libraries in this repo
+
+This repository builds **two** independent static libraries. Hosts link both;
+the core never depends on the statecache.
+
+| Library | Purpose | Dependencies |
+|---|---|---|
+| **`panaudia-core`** | Pure transport — QUIC/MOQ/Opus, ring/jitter buffers, session orchestration. Data tracks are opaque bytes. | msquic + libopus only |
+| **`panaudia-statecache`** | Optional application-semantics layer: decodes the binary attribute-cache envelope, merges by op-ID with tombstones, parses JSON. Pure logic (bytes in → merged values out); no transport dependency. | nlohmann/json only |
+
+The split keeps the transport core minimal and dependency-light (no JSON in the
+core), while sharing the cache/merge logic across hosts. `panaudia-statecache`
+is the C++ peer of the Go (`spatial-mixer/core/statecache`) and TypeScript
+(`panaudia-client/.../src/shared`) implementations — all three speak the same
+`0xCA` cache-envelope wire format. The rest of this section describes
+`panaudia-core`.
+
 ```
 Host Application
   │
@@ -64,19 +81,28 @@ Host Application
 
 ### What the Library Does NOT Do
 
-The library is deliberately transport-only. These concerns belong to the host application:
+The **`panaudia-core`** library is deliberately transport-only. These concerns
+belong to the host application (or, for the attribute cache, to the separate
+`panaudia-statecache` library above):
 
 - JWT parsing or verification (core stores and sends the JWT string verbatim)
 - MOQ namespace construction (host provides full namespace tuples; core uses them as-is)
 - Spatial audio, muting, position tracking (host sends these as opaque bytes on data tracks)
+- Attribute/state cache, JSON, op-ID merge (handled by `panaudia-statecache`, not the core)
 - Platform audio I/O (libASPL, PortAudio, Unreal AudioCapture, etc.)
-- IPC / gRPC, logging frameworks, JSON, protobuf
+- IPC / gRPC, logging frameworks, protobuf
+
+To attach an application parameter to an outgoing SUBSCRIBE (e.g. the cache-
+resume op-ID that `panaudia-statecache` produces), the host supplies opaque
+key/value params via `SessionConfig::subscribe_params_callback`; the core
+forwards them to the wire without interpreting them.
 
 
 
 ## Documentation
 
 - [Guide](docs/guide.md) -- how to use this library
-- [MOQ Protocol Compatibility](docs/moq-compatibility.md) -- protocol version, wire format, server library targeting
+- [MOQ Protocol Compatibility](docs/moq-compatibility.md) -- protocol version (draft-16), wire format, server library targeting
 - [Wire Format Byte-Level Reference](plan/moq_protocol_wire_format.md) -- encoding examples and field layouts
 - [Architecture and Implementation Plan](plan/plan.md) -- design decisions and phase history
+- [Statecache extraction](plan/extract-statecache.md) -- why the attribute cache is a separate library above the core
